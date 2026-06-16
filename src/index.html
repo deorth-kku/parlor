@@ -777,6 +777,7 @@ let streamSampleRate = 24000;
 let streamNextTime = 0;
 let streamSources = [];
 let streamTtsTime = null;
+let scrollRaf = 0;
 
 // ── Waveform Visualizer ──
 let analyser;
@@ -787,6 +788,19 @@ function getMicSource() {
     micSource = audioCtx.createMediaStreamSource(audioStream);
   }
   return micSource;
+}
+
+function scrollMessagesToBottom(immediate = false) {
+  if (!messagesDiv) return;
+  if (immediate) {
+    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    return;
+  }
+  if (scrollRaf) return;
+  scrollRaf = requestAnimationFrame(() => {
+    scrollRaf = 0;
+    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+  });
 }
 const BAR_COUNT = 40;
 const BAR_GAP = 3;
@@ -969,6 +983,7 @@ function connect() {
         } else {
           activeAssistantMsg.insertBefore(document.createTextNode(msg.delta), meta || null);
         }
+        scrollMessagesToBottom();
       } else {
         activeAssistantMsg = addMessage('assistant', msg.delta, '');
       }
@@ -989,6 +1004,7 @@ function connect() {
         activeAssistantMsg = addMessage('assistant', msg.text, `LLM ${msg.llm_time}s`);
       }
       activeAssistantMsg = null;
+      scrollMessagesToBottom(true);
     } else if (msg.type === 'audio_start') {
       if (ignoreIncomingAudio) return;
       streamSampleRate = msg.sample_rate || 24000;
@@ -1217,7 +1233,7 @@ function addMessage(role, text, meta, isHtml = false) {
     div.appendChild(metaDiv);
   }
   messagesDiv.appendChild(div);
-  messagesDiv.scrollTop = messagesDiv.scrollHeight;
+  scrollMessagesToBottom(true);
   return div;
 }
 
@@ -1233,7 +1249,7 @@ function updateLatestUserMessage(text) {
     }
   }
   lastUserMsg.insertBefore(document.createTextNode(text), meta || null);
-  messagesDiv.scrollTop = messagesDiv.scrollHeight;
+  scrollMessagesToBottom();
 }
 
 inputSourceSelect.addEventListener('change', () => {
