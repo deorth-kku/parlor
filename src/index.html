@@ -362,6 +362,41 @@
     z-index: 2;
   }
 
+  .selectors {
+    width: 100%;
+    max-width: 640px;
+    display: flex;
+    gap: 10px;
+    padding: 0 4px 10px;
+    z-index: 2;
+  }
+
+  .selector {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .selector label {
+    font-size: 10px;
+    color: var(--c-text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  .selector select {
+    appearance: none;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid rgba(255,255,255,0.08);
+    background: var(--c-surface);
+    color: var(--c-text-bright);
+    font-family: var(--font-body);
+    font-size: 13px;
+    outline: none;
+  }
+
   .ctrl-btn {
     font-family: var(--font-body);
     font-size: 12px;
@@ -439,6 +474,17 @@
   <!-- Transcript -->
   <div id="messages" class="transcript"></div>
 
+  <div class="selectors">
+    <div class="selector">
+      <label for="languageSelect">Language</label>
+      <select id="languageSelect"></select>
+    </div>
+    <div class="selector">
+      <label for="voiceSelect">Voice</label>
+      <select id="voiceSelect" disabled></select>
+    </div>
+  </div>
+
   <!-- Controls -->
   <div class="controls">
     <button id="cameraToggle" class="ctrl-btn active">Camera On</button>
@@ -458,6 +504,7 @@
 <script>
 const $ = id => document.getElementById(id);
 const video = $('video'), cameraToggle = $('cameraToggle');
+const languageSelect = $('languageSelect'), voiceSelect = $('voiceSelect');
 const messagesDiv = $('messages'), statusEl = $('status');
 const stateDot = $('stateDot'), stateText = $('stateText');
 const viewportWrap = $('viewportWrap');
@@ -470,6 +517,9 @@ let audioCtx, currentSource;
 let state = 'loading';
 let ignoreIncomingAudio = false;
 let activeAssistantMsg = null;
+let ttsOptions = null;
+let selectedLanguage = 'ja';
+let selectedVoice = 'jf_alpha';
 
 // Streaming audio playback state
 let streamSampleRate = 24000;
@@ -495,6 +545,36 @@ function initWaveformCanvas() {
 function getStateColor() {
   const colors = { listening: '#4ade80', processing: '#f59e0b', speaking: '#818cf8', loading: '#3a3d46' };
   return colors[state] || colors.loading;
+}
+
+function renderLanguageOptions() {
+  languageSelect.innerHTML = '';
+  for (const language of ttsOptions.languages) {
+    const option = document.createElement('option');
+    option.value = language.code;
+    option.textContent = `${language.label} (${language.code})`;
+    languageSelect.appendChild(option);
+  }
+}
+
+function renderVoiceOptions(languageCode, preferredVoice = null) {
+  const language = ttsOptions.languages.find(item => item.code === languageCode) || ttsOptions.languages[0];
+  voiceSelect.innerHTML = '';
+  for (const voice of language.voices) {
+    const option = document.createElement('option');
+    option.value = voice;
+    option.textContent = voice;
+    voiceSelect.appendChild(option);
+  }
+  voiceSelect.disabled = false;
+  voiceSelect.value = language.voices.includes(preferredVoice) ? preferredVoice : language.default_voice;
+  selectedVoice = voiceSelect.value;
+}
+
+function setTtsSelection(languageCode, voice) {
+  selectedLanguage = languageCode;
+  languageSelect.value = languageCode;
+  renderVoiceOptions(languageCode, voice);
 }
 
 function drawWaveform() {
@@ -746,7 +826,7 @@ function handleSpeechEnd(audio) {
   setStatus('processing', 'Processing');
   addMessage('user', '<span class="loading-dots"><span></span><span></span><span></span></span>', imageBase64 ? 'with camera' : '', true);
 
-  const payload = { audio: wavBase64 };
+  const payload = { audio: wavBase64, tts_language: selectedLanguage, tts_voice: selectedVoice };
   if (imageBase64) payload.image = imageBase64;
   ws.send(JSON.stringify(payload));
 }
@@ -884,6 +964,17 @@ cameraToggle.addEventListener('click', () => {
 async function init() {
   initWaveformCanvas();
   window.addEventListener('resize', initWaveformCanvas);
+
+  ttsOptions = await fetch('/api/tts/options').then(response => response.json());
+  renderLanguageOptions();
+  setTtsSelection(ttsOptions.default_language, ttsOptions.default_voice);
+  languageSelect.addEventListener('change', () => {
+    selectedLanguage = languageSelect.value;
+    renderVoiceOptions(selectedLanguage);
+  });
+  voiceSelect.addEventListener('change', () => {
+    selectedVoice = voiceSelect.value;
+  });
 
   await startCamera();
   connect();

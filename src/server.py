@@ -20,19 +20,42 @@ from fastapi.responses import HTMLResponse
 
 import tts
 from openai_backend import OpenAICompatibleBackend
+from voices_catalog import VOICE_CATALOG
+from tts_prompt import build_language_instruction
 
 load_dotenv()
 
 SYSTEM_PROMPT = (
     "You are a helpful real-time multimodal AI assistant. "
     "You can understand speech, images, and text. "
-    "Return concise answers and keep responses to 1-4 short sentences."
+    "Return concise answers and keep responses to 1-4 short sentences. "
+    "Always transcribe the user's speech faithfully before responding."
 )
 
 SENTENCE_END_RE = re.compile(r"[.!?。！？]")
 
 backend: OpenAICompatibleBackend | None = None
 tts_backend = None
+
+
+def get_tts_defaults() -> dict[str, str]:
+    language = VOICE_CATALOG.default_language
+    return {
+        "tts_language": language,
+        "tts_voice": VOICE_CATALOG.default_voices[language],
+    }
+
+
+def resolve_tts_selection(msg: dict[str, object]) -> tuple[str, str]:
+    defaults = get_tts_defaults()
+    language = str(msg.get("tts_language") or defaults["tts_language"])
+    if language not in VOICE_CATALOG.languages:
+        language = defaults["tts_language"]
+    voice = str(msg.get("tts_voice") or VOICE_CATALOG.languages[language]["default_voice"])
+    valid_voices = VOICE_CATALOG.languages[language]["voices"]
+    if voice not in valid_voices:
+        voice = str(VOICE_CATALOG.languages[language]["default_voice"])
+    return language, voice
 
 
 def load_models():
@@ -55,8 +78,9 @@ async def lifespan(app):
 app = FastAPI(lifespan=lifespan)
 
 
-def build_user_content(msg: dict[str, object]) -> list[dict[str, object]] | str:
+def build_user_content(msg: dict[str, object]) -> list[dict[str, object]]:
     parts: list[dict[str, object]] = []
+    tts_language, tts_voice = resolve_tts_selection(msg)
 
     if msg.get("audio"):
         parts.append(
@@ -95,7 +119,8 @@ def build_user_content(msg: dict[str, object]) -> list[dict[str, object]] | str:
     else:
         parts.append({"type": "text", "text": "Hello!"})
 
-    return parts if (msg.get("audio") or msg.get("image")) else parts[0]["text"]
+    parts.append({"type": "text", "text": build_language_instruction(tts_language, tts_voice)})
+    return parts
 
 
 def append_sentence_buffer(buffer: str, chunk: str) -> tuple[str, list[str]]:
@@ -174,8 +199,11 @@ def json_string_field_is_closed(text: str, field_name: str) -> tuple[str | None,
     return "".join(out), False
 
 
-async def speak_sentence(ws: WebSocket, sentence: str, index: int) -> None:
-    pcm = await asyncio.get_event_loop().run_in_executor(None, lambda s=sentence: tts_backend.generate(s))
+async def speak_sentence(ws: WebSocket, sentence: str, index: int, language: str, voice: str) -> None:
+    pcm = await asyncio.get_event_loop().run_in_executor(
+        None,
+        lambda s=sentence, lang=language, selected_voice=voice: tts_backend.generate(s, lang, selected_voice),
+    )
     pcm_int16 = (pcm * 32767).clip(-32768, 32767).astype(np.int16)
     await ws.send_text(
         json.dumps(
@@ -191,6 +219,23 @@ async def speak_sentence(ws: WebSocket, sentence: str, index: int) -> None:
 @app.get("/")
 async def root():
     return HTMLResponse(content=(Path(__file__).parent / "index.html").read_text(encoding="utf-8"))
+
+
+@app.get("/api/tts/options")
+async def tts_options():
+    return {
+        "languages": [
+            {
+                "code": code,
+                "label": data["label"],
+                "voices": data["voices"],
+                "default_voice": data["default_voice"],
+            }
+            for code, data in VOICE_CATALOG.languages.items()
+        ],
+        "default_language": VOICE_CATALOG.default_language,
+        "default_voice": VOICE_CATALOG.default_voices[VOICE_CATALOG.default_language],
+    }
 
 
 @app.websocket("/ws")
@@ -227,6 +272,7 @@ async def websocket_endpoint(ws: WebSocket):
                 break
 
             interrupted.clear()
+            tts_language, tts_voice = resolve_tts_selection(msg)
             user_content = build_user_content(msg)
             history.append({"role": "user", "content": user_content})
 
@@ -255,7 +301,7 @@ async def websocket_endpoint(ws: WebSocket):
                             )
                         )
                     sentence = pending_sentences.pop(0)
-                    await speak_sentence(ws, sentence, sentence_index)
+                    await speak_sentence(ws, sentence, sentence_index, tts_language, tts_voice)
                     sentence_index += 1
 
             try:
