@@ -1055,7 +1055,7 @@ async function switchVideoSource(source) {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: source } }, audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
       mediaStream = stream; video.srcObject = stream; videoSource = source; currentCameraId = source;
-      video.classList.add('mirror');
+      video.classList.add('mirror'); // default mirror for all cameras
     } catch (e) { console.warn('Camera start failed:', e.message); }
   }
 }
