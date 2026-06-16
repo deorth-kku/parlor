@@ -1031,6 +1031,17 @@ function setStatus(cls, text) { statusEl.className = `status-pill ${cls}`; statu
 // ── Video Source Switching ──
 let videoSource = 'off';
 let currentCameraId = null;
+let screenShareTrack = null;
+let suppressScreenShareEnded = false;
+
+function handleScreenShareEnded() {
+  if (suppressScreenShareEnded) return;
+  suppressScreenShareEnded = true;
+  stopStream();
+  videoSource = 'off';
+  inputSourceSelect.value = 'off';
+  video.classList.remove('mirror');
+}
 
 async function enumerateVideoDevices() {
   try {
@@ -1062,7 +1073,14 @@ async function enumerateVideoDevices() {
 }
 
 async function stopStream() {
-  if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; video.srcObject = null; }
+  suppressScreenShareEnded = true;
+  if (mediaStream) {
+    mediaStream.getTracks().forEach(t => t.stop());
+    mediaStream = null;
+  }
+  screenShareTrack = null;
+  video.srcObject = null;
+  suppressScreenShareEnded = false;
 }
 
 async function switchVideoSource(source) {
@@ -1074,7 +1092,9 @@ async function switchVideoSource(source) {
   } else if (source === 'screen') {
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({ video: { cursor: 'always' } });
-      mediaStream = stream; video.srcObject = stream; videoSource = 'screen';
+      mediaStream = stream; screenShareTrack = stream.getVideoTracks()[0] || null;
+      if (screenShareTrack) screenShareTrack.onended = handleScreenShareEnded;
+      video.srcObject = stream; videoSource = 'screen';
       video.classList.remove('mirror');
     } catch (e) { console.warn('Screen share failed:', e.message); }
   } else {
