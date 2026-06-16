@@ -6,7 +6,6 @@ import asyncio
 import base64
 import json
 import os
-import re
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -20,6 +19,7 @@ from fastapi.responses import HTMLResponse
 
 import tts
 from openai_backend import OpenAICompatibleBackend
+from sentence_splitter import append_sentence_buffer
 from voices_catalog import VOICE_CATALOG
 from tts_prompt import build_language_instruction
 
@@ -31,8 +31,6 @@ SYSTEM_PROMPT = (
     "Return concise answers and keep responses to 1-4 short sentences. "
     "Always transcribe the user's speech faithfully before responding."
 )
-
-SENTENCE_END_RE = re.compile(r"[.!?。！？]")
 
 backend: OpenAICompatibleBackend | None = None
 tts_backend = None
@@ -121,21 +119,6 @@ def build_user_content(msg: dict[str, object]) -> list[dict[str, object]]:
 
     parts.append({"type": "text", "text": build_language_instruction(tts_language, tts_voice)})
     return parts
-
-
-def append_sentence_buffer(buffer: str, chunk: str) -> tuple[str, list[str]]:
-    text = buffer + chunk
-    sentences: list[str] = []
-    start = 0
-    for match in SENTENCE_END_RE.finditer(text):
-        end = match.end()
-        sentence = text[start:end].strip()
-        if sentence:
-            sentences.append(sentence)
-        start = end
-        while start < len(text) and text[start].isspace():
-            start += 1
-    return text[start:], sentences
 
 
 def json_string_field_is_closed(text: str, field_name: str) -> tuple[str | None, bool]:
