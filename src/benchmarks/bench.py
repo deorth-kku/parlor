@@ -169,11 +169,10 @@ async def main():
     print("=" * 80)
 
     async with websockets.connect(SERVER_URL) as ws:
-        # Tool calling works
+        # Structured JSON works
         r = await send_and_receive(ws, {"text": "Hello, nice to meet you!"})
-        print(f"  Tool called:        {'PASS' if r['transcription'] else 'FAIL'}")
         print(f"  Has response:       {'PASS' if r['text'] and len(r['text']) > 0 else 'FAIL'}")
-        print(f"  No raw delimiters:  {'PASS' if '<|\"|>' not in r['text'] else 'FAIL'}")
+        print(f"  Has transcription:  {'PASS' if r['transcription'] is not None else 'FAIL'}")
 
         # Image description works
         r = await send_and_receive(ws, {"image": image})

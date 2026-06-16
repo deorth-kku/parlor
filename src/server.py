@@ -1,4 +1,6 @@
-"""Parlor — on-device, real-time multimodal AI (voice + vision)."""
+"""Parlor - real-time multimodal AI (voice + vision)."""
+
+from __future__ import annotations
 
 import asyncio
 import base64
@@ -9,61 +11,44 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-import litert_lm
 import numpy as np
 import uvicorn
+from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 
 import tts
+from openai_backend import OpenAICompatibleBackend
 
-from dotenv import load_dotenv
 load_dotenv()
 
-HF_REPO = "litert-community/gemma-4-E4B-it-litert-lm"
-HF_FILENAME = "gemma-4-E4B-it.litertlm"
-
-
-def resolve_model_path() -> str:
-    path = os.environ.get("MODEL_PATH", "")
-    if path:
-        return path
-    from huggingface_hub import hf_hub_download
-    print(f"Downloading {HF_REPO}/{HF_FILENAME} (first run only)...")
-    return hf_hub_download(repo_id=HF_REPO, filename=HF_FILENAME)
-
-
-MODEL_PATH = resolve_model_path()
 SYSTEM_PROMPT = (
-    "あなたは、親しみやすく会話型のAIアシスタントです。ユーザーはマイクを通してあなたに話しかけ、カメラの映像を見せています。"
-    "まず、ユーザーの発言を正確に書き起こし、それから応答を作成してください。"
+    "You are a helpful real-time multimodal AI assistant. "
+    "You can understand speech, images, and text. "
+    "Return concise answers and keep responses to 1-4 short sentences."
 )
 
-SENTENCE_SPLIT_RE = re.compile(r'(?<=[.!?])\s+')
+SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
-engine = None
+backend: OpenAICompatibleBackend | None = None
 tts_backend = None
 
 
 def load_models():
-    global engine, tts_backend
-    print(f"Loading Gemma 4 E4B from {MODEL_PATH}...")
-    engine = litert_lm.Engine(
-        MODEL_PATH,
-        backend=litert_lm.Backend.GPU,
-        vision_backend=litert_lm.Backend.GPU,
-        audio_backend=litert_lm.Backend.CPU,
-    )
-    engine.__enter__()
-    print("Engine loaded.")
-
+    global backend, tts_backend
+    backend = OpenAICompatibleBackend.from_env()
+    print(f"OpenAI-compatible backend loaded: {backend._config.base_url} model={backend._config.model}")
     tts_backend = tts.load()
 
 
 @asynccontextmanager
 async def lifespan(app):
     await asyncio.get_event_loop().run_in_executor(None, load_models)
-    yield
+    try:
+        yield
+    finally:
+        if backend is not None:
+            await backend.aclose()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -75,6 +60,49 @@ def split_sentences(text: str) -> list[str]:
     return [s.strip() for s in parts if s.strip()]
 
 
+def build_user_content(msg: dict[str, object]) -> list[dict[str, object]] | str:
+    parts: list[dict[str, object]] = []
+
+    if msg.get("audio"):
+        parts.append(
+            {
+                "type": "input_audio",
+                "input_audio": {
+                    "data": msg["audio"],
+                    "format": "wav",
+                },
+            }
+        )
+
+    if msg.get("image"):
+        parts.append(
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/jpeg;base64,{msg['image']}",
+                },
+            }
+        )
+
+    if msg.get("text"):
+        parts.append({"type": "text", "text": str(msg["text"])})
+    elif msg.get("audio") and msg.get("image"):
+        parts.append(
+            {
+                "type": "text",
+                "text": "The user is speaking while showing an image. Transcribe the speech and answer using the image if relevant.",
+            }
+        )
+    elif msg.get("audio"):
+        parts.append({"type": "text", "text": "Transcribe the user's speech and respond briefly."})
+    elif msg.get("image"):
+        parts.append({"type": "text", "text": "Describe the image briefly and naturally."})
+    else:
+        parts.append({"type": "text", "text": "Hello!"})
+
+    return parts if (msg.get("audio") or msg.get("image")) else parts[0]["text"]
+
+
 @app.get("/")
 async def root():
     return HTMLResponse(content=(Path(__file__).parent / "index.html").read_text(encoding="utf-8"))
@@ -84,31 +112,15 @@ async def root():
 async def websocket_endpoint(ws: WebSocket):
     await ws.accept()
 
-    # Per-connection tool state captured via closure
-    tool_result = {}
-
-    def respond_to_user(transcription: str, response: str) -> str:
-        """Respond to the user's voice message.
-
-        Args:
-            transcription: Exact transcription of what the user said in the audio.
-            response: Your conversational response to the user. Keep it to 1-4 short sentences.
-        """
-        tool_result["transcription"] = transcription
-        tool_result["response"] = response
-        return "OK"
-
-    conversation = engine.create_conversation(
-        messages=[{"role": "system", "content": SYSTEM_PROMPT}],
-        tools=[respond_to_user],
-    )
-    conversation.__enter__()
+    if backend is None:
+        await ws.close(code=1011, reason="Backend not initialized")
+        return
 
     interrupted = asyncio.Event()
     msg_queue = asyncio.Queue()
+    history: list[dict[str, object]] = [{"role": "system", "content": SYSTEM_PROMPT}]
 
     async def receiver():
-        """Receive messages from WebSocket and route them."""
         try:
             while True:
                 raw = await ws.receive_text()
@@ -130,40 +142,25 @@ async def websocket_endpoint(ws: WebSocket):
                 break
 
             interrupted.clear()
+            user_content = build_user_content(msg)
 
-            content = []
-            if msg.get("audio"):
-                content.append({"type": "audio", "blob": msg["audio"]})
-            if msg.get("image"):
-                content.append({"type": "image", "blob": msg["image"]})
-
-            if msg.get("audio") and msg.get("image"):
-                content.append({"type": "text", "text": "The user just spoke to you (audio) while showing their camera (image). Respond to what they said, referencing what you see if relevant."})
-            elif msg.get("audio"):
-                content.append({"type": "text", "text": "The user just spoke to you. Respond to what they said."})
-            elif msg.get("image"):
-                content.append({"type": "text", "text": "The user is showing you their camera. Describe what you see."})
-            else:
-                content.append({"type": "text", "text": msg.get("text", "Hello!")})
-
-            # LLM inference
             t0 = time.time()
-            tool_result.clear()
-            response = await asyncio.get_event_loop().run_in_executor(
-                None, lambda: conversation.send_message({"role": "user", "content": content})
-            )
+            response = await backend.complete_turn(history, user_content=user_content)
             llm_time = time.time() - t0
 
-            # Extract response from tool call or fallback to raw text
-            if tool_result:
-                strip = lambda s: s.replace('<|"|>', "").strip()
-                transcription = strip(tool_result.get("transcription", ""))
-                text_response = strip(tool_result.get("response", ""))
-                print(f"LLM ({llm_time:.2f}s) [tool] heard: {transcription!r} → {text_response}")
+            transcription = str(response.get("transcription", "")).strip()
+            text_response = str(response.get("response", "")).strip()
+            if not text_response:
+                text_response = str(response.get("_raw_content", "")).strip() or "Okay."
+
+            if transcription:
+                transcription = transcription.replace('<|"|>', "").strip()
+                print(f"LLM ({llm_time:.2f}s) [json] heard: {transcription!r} -> {text_response}")
             else:
-                transcription = None
-                text_response = response["content"][0]["text"]
-                print(f"LLM ({llm_time:.2f}s) [no tool]: {text_response}")
+                print(f"LLM ({llm_time:.2f}s) [json]: {text_response}")
+
+            history.append({"role": "user", "content": user_content})
+            history.append({"role": "assistant", "content": text_response})
 
             if interrupted.is_set():
                 print("Interrupted after LLM, skipping response")
@@ -178,26 +175,26 @@ async def websocket_endpoint(ws: WebSocket):
                 print("Interrupted before TTS, skipping audio")
                 continue
 
-            # Streaming TTS: split into sentences and send chunks progressively
             sentences = split_sentences(text_response)
             if not sentences:
                 sentences = [text_response]
 
             tts_start = time.time()
-
-            # Signal start of audio stream
-            await ws.send_text(json.dumps({
-                "type": "audio_start",
-                "sample_rate": tts_backend.sample_rate,
-                "sentence_count": len(sentences),
-            }))
+            await ws.send_text(
+                json.dumps(
+                    {
+                        "type": "audio_start",
+                        "sample_rate": tts_backend.sample_rate,
+                        "sentence_count": len(sentences),
+                    }
+                )
+            )
 
             for i, sentence in enumerate(sentences):
                 if interrupted.is_set():
-                    print(f"Interrupted during TTS (sentence {i+1}/{len(sentences)})")
+                    print(f"Interrupted during TTS (sentence {i + 1}/{len(sentences)})")
                     break
 
-                # Generate audio for this sentence
                 pcm = await asyncio.get_event_loop().run_in_executor(
                     None, lambda s=sentence: tts_backend.generate(s)
                 )
@@ -205,28 +202,34 @@ async def websocket_endpoint(ws: WebSocket):
                 if interrupted.is_set():
                     break
 
-                # Convert to 16-bit PCM and send as base64
                 pcm_int16 = (pcm * 32767).clip(-32768, 32767).astype(np.int16)
-                await ws.send_text(json.dumps({
-                    "type": "audio_chunk",
-                    "audio": base64.b64encode(pcm_int16.tobytes()).decode(),
-                    "index": i,
-                }))
+                await ws.send_text(
+                    json.dumps(
+                        {
+                            "type": "audio_chunk",
+                            "audio": base64.b64encode(pcm_int16.tobytes()).decode(),
+                            "index": i,
+                        }
+                    )
+                )
 
             tts_time = time.time() - tts_start
             print(f"TTS ({tts_time:.2f}s): {len(sentences)} sentences")
 
             if not interrupted.is_set():
-                await ws.send_text(json.dumps({
-                    "type": "audio_end",
-                    "tts_time": round(tts_time, 2),
-                }))
+                await ws.send_text(
+                    json.dumps(
+                        {
+                            "type": "audio_end",
+                            "tts_time": round(tts_time, 2),
+                        }
+                    )
+                )
 
     except WebSocketDisconnect:
         print("Client disconnected")
     finally:
         recv_task.cancel()
-        conversation.__exit__(None, None, None)
 
 
 if __name__ == "__main__":
