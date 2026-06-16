@@ -1011,7 +1011,10 @@ let currentCameraId = null;
 
 async function enumerateVideoDevices() {
   try {
+    // Request camera permission first so labels are populated
+    const probe = await navigator.mediaDevices.getUserMedia({ video: true });
     const devices = await navigator.mediaDevices.enumerateDevices();
+    probe.getTracks().forEach(t => t.stop());
     const videoInputs = devices.filter(d => d.kind === 'videoinput');
     const select = inputSourceSelect;
     select.innerHTML = '';
