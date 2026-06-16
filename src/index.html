@@ -66,12 +66,11 @@
   /* ── Header ── */
   header {
     width: 100%;
-    max-width: 720px;
-    padding: 20px 8px 0;
+    padding: 16px 24px;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    z-index: 2;
+    z-index: 10;
     flex-shrink: 0;
   }
 
@@ -151,15 +150,156 @@
   .status-pill.processing { color: var(--c-process); background: var(--c-process-dim); }
   .status-pill.processing::before { background: var(--c-process); }
 
-  /* ── Main stack ── */
-  .portal-stack {
+  /* ── Main layout (PC only, hidden on mobile) ── */
+  .pc-layout {
+    display: none;
     flex: 1;
     width: 100%;
-    max-width: 720px;
+    max-width: 1400px;
+    padding: 0 24px 24px;
+    gap: 24px;
+    z-index: 2;
+    min-height: 0;
+  }
+
+  /* ── Sidebar panels ── */
+  .sidebar {
+    width: 240px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255,255,255,0.06) transparent;
+  }
+
+  .sidebar::-webkit-scrollbar { width: 3px; }
+  .sidebar::-webkit-scrollbar-track { background: transparent; }
+  .sidebar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 2px; }
+
+  .side-section {
+    background: var(--c-surface);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 14px;
+    padding: 16px;
+  }
+
+  .side-section h3 {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--c-text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: 12px;
+  }
+
+  .side-selector {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 12px;
+  }
+
+  .side-selector:last-child { margin-bottom: 0; }
+
+  .side-selector label {
+    font-size: 10px;
+    color: var(--c-text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  .side-selector select {
+    appearance: none;
+    padding: 9px 12px;
+    border-radius: 10px;
+    border: 1px solid rgba(255,255,255,0.08);
+    background: var(--c-surface);
+    color: var(--c-text-bright);
+    font-family: var(--font-body);
+    font-size: 13px;
+    outline: none;
+    cursor: pointer;
+    transition: border-color 0.2s;
+    /* Fix for dark theme dropdown */
+    color-scheme: dark;
+  }
+
+  .side-selector select:hover { border-color: rgba(255,255,255,0.15); }
+
+  .ctrl-btn {
+    font-family: var(--font-body);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 10px 16px;
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 10px;
+    background: var(--c-surface);
+    color: var(--c-text-dim);
+    cursor: pointer;
+    transition: all 0.2s;
+    letter-spacing: 0.02em;
+    width: 100%;
+    text-align: center;
+  }
+
+  .ctrl-btn:hover { background: var(--c-surface-hover); color: var(--c-text); }
+  .ctrl-btn.active {
+    background: var(--c-listen-dim);
+    color: var(--c-listen);
+    border-color: rgba(74,222,128,0.15);
+  }
+
+  .state-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--c-text-dim);
+    transition: color 0.3s;
+    padding: 10px 12px;
+    background: rgba(255,255,255,0.02);
+    border-radius: 10px;
+  }
+
+  .state-indicator .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--glow);
+    transition: background 0.3s;
+    box-shadow: 0 0 8px var(--glow-dim);
+  }
+  .state-indicator .dot.listening { animation: dot-pulse 2s ease-in-out infinite; }
+  .state-indicator .dot.processing { animation: dot-pulse 0.6s ease-in-out infinite; }
+  .state-indicator .dot.speaking { animation: dot-pulse 1s ease-in-out infinite; }
+  .state-indicator .dot.loading { animation: dot-pulse 2.5s ease-in-out infinite; }
+
+  @keyframes dot-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.4; transform: scale(0.8); }
+  }
+
+  /* ── Center column ── */
+  .center-col {
+    flex: 1;
+    min-width: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
-    padding: 20px 8px 16px;
+    gap: 0;
+    min-height: 0;
+  }
+
+  .portal-stack {
+    flex: 1;
+    width: 100%;
+    max-width: 640px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
     gap: 0;
     z-index: 2;
     min-height: 0;
@@ -350,19 +490,26 @@
     30% { opacity: 1; transform: translateY(-4px); }
   }
 
-  /* ── Controls bar ── */
-  .controls {
-    width: 100%;
-    max-width: 640px;
-    padding: 12px 4px 4px;
+  /* ── Mobile layout (default) ── */
+  .mobile-layout {
     display: flex;
+    flex-direction: column;
     align-items: center;
-    justify-content: space-between;
-    flex-shrink: 0;
+    flex: 1;
+    width: 100%;
+    max-width: 720px;
+    padding: 16px 8px 16px;
+    gap: 0;
     z-index: 2;
+    min-height: 0;
   }
 
-  .selectors {
+  .mobile-layout .portal-stack {
+    width: 100%;
+    max-width: 640px;
+  }
+
+  .mobile-layout .selectors {
     width: 100%;
     max-width: 640px;
     display: flex;
@@ -371,21 +518,21 @@
     z-index: 2;
   }
 
-  .selector {
+  .mobile-layout .selector {
     flex: 1;
     display: flex;
     flex-direction: column;
     gap: 6px;
   }
 
-  .selector label {
+  .mobile-layout .selector label {
     font-size: 10px;
     color: var(--c-text-dim);
     text-transform: uppercase;
     letter-spacing: 0.08em;
   }
 
-  .selector select {
+  .mobile-layout .selector select {
     appearance: none;
     padding: 10px 12px;
     border-radius: 10px;
@@ -397,7 +544,18 @@
     outline: none;
   }
 
-  .ctrl-btn {
+  .mobile-layout .controls {
+    width: 100%;
+    max-width: 640px;
+    padding: 12px 4px 4px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+    z-index: 2;
+  }
+
+  .mobile-layout .ctrl-btn {
     font-family: var(--font-body);
     font-size: 12px;
     font-weight: 600;
@@ -409,16 +567,18 @@
     cursor: pointer;
     transition: all 0.2s;
     letter-spacing: 0.02em;
+    width: auto;
+    text-align: center;
   }
 
-  .ctrl-btn:hover { background: var(--c-surface-hover); color: var(--c-text); }
-  .ctrl-btn.active {
+  .mobile-layout .ctrl-btn:hover { background: var(--c-surface-hover); color: var(--c-text); }
+  .mobile-layout .ctrl-btn.active {
     background: var(--c-listen-dim);
     color: var(--c-listen);
     border-color: rgba(74,222,128,0.15);
   }
 
-  .state-indicator {
+  .mobile-layout .state-indicator {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -426,9 +586,12 @@
     font-weight: 500;
     color: var(--c-text-dim);
     transition: color 0.3s;
+    padding: 0;
+    background: none;
+    border-radius: 0;
   }
 
-  .state-indicator .dot {
+  .mobile-layout .state-indicator .dot {
     width: 8px;
     height: 8px;
     border-radius: 50%;
@@ -436,16 +599,16 @@
     transition: background 0.3s;
     box-shadow: 0 0 8px var(--glow-dim);
   }
-  .state-indicator .dot.listening { animation: dot-pulse 2s ease-in-out infinite; }
-  .state-indicator .dot.processing { animation: dot-pulse 0.6s ease-in-out infinite; }
-  .state-indicator .dot.speaking { animation: dot-pulse 1s ease-in-out infinite; }
-  .state-indicator .dot.loading { animation: dot-pulse 2.5s ease-in-out infinite; }
+  .mobile-layout .state-indicator .dot.listening { animation: dot-pulse 2s ease-in-out infinite; }
+  .mobile-layout .state-indicator .dot.processing { animation: dot-pulse 0.6s ease-in-out infinite; }
+  .mobile-layout .state-indicator .dot.speaking { animation: dot-pulse 1s ease-in-out infinite; }
+  .mobile-layout .state-indicator .dot.loading { animation: dot-pulse 2.5s ease-in-out infinite; }
 
-  @keyframes dot-pulse {
-    0%, 100% { opacity: 1; transform: scale(1); }
-    50% { opacity: 0.4; transform: scale(0.8); }
+  /* ── Responsive ── */
+  @media (min-width: 1024px) {
+    .pc-layout { display: flex; }
+    .mobile-layout { display: none; }
   }
-
 </style>
 </head>
 <body>
@@ -459,57 +622,138 @@
   <div id="status" class="status-pill disconnected">Disconnected</div>
 </header>
 
-<div class="portal-stack">
-  <!-- Webcam viewport with glow layers -->
-  <div id="viewportWrap" class="viewport-wrap loading">
-    <div class="viewport-glow"></div>
-    <video id="video" autoplay muted playsinline></video>
+<!-- Desktop layout (PC only) -->
+<div class="pc-layout">
+  <!-- Left sidebar -->
+  <aside class="sidebar">
+    <div class="side-section">
+      <h3>Settings</h3>
+      <div class="side-selector">
+        <label for="languageSelect">Language</label>
+        <select id="languageSelect"></select>
+      </div>
+      <div class="side-selector">
+        <label for="voiceSelect">Voice</label>
+        <select id="voiceSelect" disabled></select>
+      </div>
+    </div>
+
+    <div class="side-section">
+      <h3>Camera</h3>
+      <button id="cameraToggle" class="ctrl-btn active">Camera On</button>
+    </div>
+
+    <div class="side-section">
+      <h3>Status</h3>
+      <div class="state-indicator">
+        <div id="stateDot" class="dot loading"></div>
+        <span id="stateText">Loading...</span>
+      </div>
+    </div>
+
+    <div class="side-section">
+      <span class="on-device-pill">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="4" width="12" height="9" rx="2"/><path d="M5 4V3a3 3 0 0 1 6 0v1"/></svg>
+        Multimodal
+      </span>
+    </div>
+  </aside>
+
+  <!-- Center column: video + chat -->
+  <div class="center-col">
+    <div class="portal-stack">
+      <!-- Webcam viewport with glow layers -->
+      <div id="viewportWrap" class="viewport-wrap loading">
+        <div class="viewport-glow"></div>
+        <video id="video" autoplay muted playsinline></video>
+      </div>
+
+      <!-- Audio waveform visualizer -->
+      <div class="waveform-wrap">
+        <canvas id="waveform"></canvas>
+      </div>
+
+      <!-- Transcript -->
+      <div id="messages" class="transcript"></div>
+    </div>
   </div>
 
-  <!-- Audio waveform visualizer -->
-  <div class="waveform-wrap">
-    <canvas id="waveform"></canvas>
-  </div>
+  <!-- Right sidebar (mirrors left for balance, or leave empty) -->
+  <aside class="sidebar">
+    <!-- Can add more panels here in the future: history, preferences, etc. -->
+  </aside>
+</div>
 
-  <!-- Transcript -->
-  <div id="messages" class="transcript"></div>
+<!-- Mobile layout (default) -->
+<div class="mobile-layout">
+  <div class="portal-stack">
+    <!-- Webcam viewport with glow layers -->
+    <div id="viewportWrap" class="viewport-wrap loading">
+      <div class="viewport-glow"></div>
+      <video id="video" autoplay muted playsinline></video>
+    </div>
 
-  <div class="selectors">
-    <div class="selector">
-      <label for="languageSelect">Language</label>
-      <select id="languageSelect"></select>
+    <!-- Audio waveform visualizer -->
+    <div class="waveform-wrap">
+      <canvas id="waveform"></canvas>
     </div>
-    <div class="selector">
-      <label for="voiceSelect">Voice</label>
-      <select id="voiceSelect" disabled></select>
-    </div>
-  </div>
 
-  <!-- Controls -->
-  <div class="controls">
-    <button id="cameraToggle" class="ctrl-btn active">Camera On</button>
-    <div class="state-indicator">
-      <div id="stateDot" class="dot loading"></div>
-      <span id="stateText">Loading...</span>
+    <!-- Transcript -->
+    <div id="messages" class="transcript"></div>
+
+    <div class="selectors">
+      <div class="selector">
+        <label for="languageSelect">Language</label>
+        <select id="languageSelect"></select>
+      </div>
+      <div class="selector">
+        <label for="voiceSelect">Voice</label>
+        <select id="voiceSelect" disabled></select>
+      </div>
     </div>
-    <span class="on-device-pill">
-      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="4" width="12" height="9" rx="2"/><path d="M5 4V3a3 3 0 0 1 6 0v1"/></svg>
-      Multimodal
-    </span>
+
+    <!-- Controls -->
+    <div class="controls">
+      <button id="cameraToggle" class="ctrl-btn active">Camera On</button>
+      <div class="state-indicator">
+        <div id="stateDot" class="dot loading"></div>
+        <span id="stateText">Loading...</span>
+      </div>
+      <span class="on-device-pill">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="4" width="12" height="9" rx="2"/><path d="M5 4V3a3 3 0 0 1 6 0v1"/></svg>
+        Multimodal
+      </span>
+    </div>
   </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.29/dist/bundle.min.js"></script>
 <script>
-const $ = id => document.getElementById(id);
-const video = $('video'), cameraToggle = $('cameraToggle');
-const languageSelect = $('languageSelect'), voiceSelect = $('voiceSelect');
-const messagesDiv = $('messages'), statusEl = $('status');
-const stateDot = $('stateDot'), stateText = $('stateText');
-const viewportWrap = $('viewportWrap');
-const waveformCanvas = $('waveform');
-const waveformCtx = waveformCanvas.getContext('2d');
+function $$(id) {
+  const showPc = window.matchMedia('(min-width: 1024px)').matches;
+  const layout = showPc ? '.pc-layout' : '.mobile-layout';
+  const el = document.querySelector(`${layout} #${id}`);
+  if (el) return el;
+  return document.getElementById(id);
+}
+let video, cameraToggle, languageSelect, voiceSelect, messagesDiv, statusEl;
+let stateDot, stateText, viewportWrap, waveformCanvas, waveformCtx;
+
+function refreshElements() {
+  video = $$('video');
+  cameraToggle = $$('cameraToggle');
+  languageSelect = $$('languageSelect');
+  voiceSelect = $$('voiceSelect');
+  messagesDiv = $$('messages');
+  statusEl = $$('status');
+  stateDot = $$('stateDot');
+  stateText = $$('stateText');
+  viewportWrap = $$('viewportWrap');
+  waveformCanvas = $$('waveform');
+  waveformCtx = waveformCanvas.getContext('2d');
+}
+refreshElements();
 
 let ws, mediaStream, myvad;
 let cameraEnabled = true;
@@ -523,8 +767,8 @@ let selectedVoice = 'jf_alpha';
 
 // Streaming audio playback state
 let streamSampleRate = 24000;
-let streamNextTime = 0;         // When to schedule next chunk
-let streamSources = [];         // Active AudioBufferSourceNodes
+let streamNextTime = 0;
+let streamSources = [];
 let streamTtsTime = null;
 
 // ── Waveform Visualizer ──
@@ -595,12 +839,10 @@ function drawWaveform() {
   for (let i = 0; i < BAR_COUNT; i++) {
     let amplitude;
     if (dataArray) {
-      // Map bar index to frequency bin
       const binIndex = Math.floor((i / BAR_COUNT) * dataArray.length * 0.6);
       amplitude = dataArray[binIndex] / 255;
     }
 
-    // If no real audio data or very quiet, use ambient drift
     if (!dataArray || amplitude < 0.02) {
       ambientPhase += 0.0001;
       const drift = Math.sin(ambientPhase * 3 + i * 0.4) * 0.5 + 0.5;
@@ -630,12 +872,11 @@ function updateSpeakingGlow() {
   let sum = 0;
   for (let i = 0; i < data.length; i++) sum += data[i];
   const avg = sum / data.length / 255;
-  // Modulate the glow layers based on audio amplitude
   const intensity = 0.3 + avg * 0.7;
   viewportWrap.style.setProperty('--speak-intensity', intensity);
   const spread = 20 + avg * 60;
   const inner = 15 + avg * 25;
-  viewportWrap.querySelector('.viewport-glow').style.boxShadow =
+  document.querySelector('.viewport-glow').style.boxShadow =
     `0 0 ${spread}px ${spread * 0.4}px rgba(129,140,248,${intensity * 0.25})`;
   viewportWrap.style.boxShadow =
     `inset 0 0 ${inner}px rgba(129,140,248,${intensity * 0.15}), 0 0 ${inner}px rgba(129,140,248,${intensity * 0.2})`;
@@ -646,21 +887,17 @@ function updateSpeakingGlow() {
 function setState(newState) {
   state = newState;
 
-  // Update state indicator
   stateDot.className = `dot ${newState}`;
   const labels = { loading: 'Loading...', listening: 'Listening', processing: 'Thinking...', speaking: 'Speaking' };
   stateText.textContent = labels[newState] || newState;
 
-  // Update viewport glow class
   viewportWrap.className = `viewport-wrap ${newState}`;
 
-  // Reset inline styles from speaking glow
   if (newState !== 'speaking') {
     viewportWrap.style.boxShadow = '';
-    viewportWrap.querySelector('.viewport-glow').style.boxShadow = '';
+    document.querySelector('.viewport-glow').style.boxShadow = '';
   }
 
-  // Update CSS custom properties for state color (must use resolved values, not nested var())
   const stateVars = {
     listening: ['#4ade80', 'rgba(74,222,128,0.12)'],
     processing: ['#f59e0b', 'rgba(245,158,11,0.12)'],
@@ -671,15 +908,12 @@ function setState(newState) {
   document.documentElement.style.setProperty('--glow', glow);
   document.documentElement.style.setProperty('--glow-dim', glowDim);
 
-  // Kick off speaking glow animation
   if (newState === 'speaking') requestAnimationFrame(updateSpeakingGlow);
 
-  // Raise VAD threshold during speaking to reduce echo false triggers
   if (myvad) {
     myvad.setOptions({ positiveSpeechThreshold: newState === 'speaking' ? 0.92 : 0.5 });
   }
 
-  // Connect/disconnect mic analyser based on state
   if (newState === 'listening' && mediaStream && audioCtx && analyser) {
     if (!micSource) {
       micSource = audioCtx.createMediaStreamSource(mediaStream);
@@ -796,11 +1030,10 @@ function captureFrame() {
 
 // ── VAD Handlers ──
 let speakingStartedAt = 0;
-const BARGE_IN_GRACE_MS = 800; // Ignore VAD triggers shortly after TTS starts (echo)
+const BARGE_IN_GRACE_MS = 800;
 
 function handleSpeechStart() {
   if (state === 'speaking') {
-    // Ignore echo: don't allow barge-in right after TTS starts playing
     if (Date.now() - speakingStartedAt < BARGE_IN_GRACE_MS) {
       console.log('Barge-in suppressed (echo grace period)');
       return;
@@ -872,7 +1105,7 @@ function startStreamPlayback() {
   stopPlayback();
   ensureAudioCtx();
   if (audioCtx.state === 'suspended') audioCtx.resume();
-  streamNextTime = audioCtx.currentTime + 0.05; // Small initial buffer
+  streamNextTime = audioCtx.currentTime + 0.05;
   speakingStartedAt = Date.now();
   setState('speaking');
 }
@@ -880,7 +1113,6 @@ function startStreamPlayback() {
 function queueAudioChunk(base64Pcm) {
   ensureAudioCtx();
 
-  // Decode base64 -> Int16 PCM -> Float32
   const bin = atob(base64Pcm);
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
@@ -888,7 +1120,6 @@ function queueAudioChunk(base64Pcm) {
   const float32 = new Float32Array(int16.length);
   for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768;
 
-  // Create AudioBuffer and schedule it
   const audioBuffer = audioCtx.createBuffer(1, float32.length, streamSampleRate);
   audioBuffer.getChannelData(0).set(float32);
 
@@ -897,7 +1128,6 @@ function queueAudioChunk(base64Pcm) {
   source.connect(audioCtx.destination);
   source.connect(analyser);
 
-  // Schedule gapless playback
   const startAt = Math.max(streamNextTime, audioCtx.currentTime);
   source.start(startAt);
   streamNextTime = startAt + audioBuffer.duration;
@@ -905,11 +1135,9 @@ function queueAudioChunk(base64Pcm) {
   streamSources.push(source);
   currentSource = source;
 
-  // Clean up when this chunk finishes
   source.onended = () => {
     const idx = streamSources.indexOf(source);
     if (idx !== -1) streamSources.splice(idx, 1);
-    // If this was the last chunk and no more are queued, return to listening
     if (streamSources.length === 0 && state === 'speaking') {
       currentSource = null;
       setState('listening');
@@ -963,7 +1191,7 @@ cameraToggle.addEventListener('click', () => {
 // ── Init ──
 async function init() {
   initWaveformCanvas();
-  window.addEventListener('resize', initWaveformCanvas);
+  window.addEventListener('resize', () => { refreshElements(); initWaveformCanvas(); });
 
   ttsOptions = await fetch('/api/tts/options').then(response => response.json());
   renderLanguageOptions();
@@ -979,7 +1207,6 @@ async function init() {
   await startCamera();
   connect();
 
-  // Initialize VAD with shared mic stream
   myvad = await vad.MicVAD.new({
     getStream: async () => new MediaStream(mediaStream.getAudioTracks()),
     positiveSpeechThreshold: 0.5,
@@ -996,8 +1223,6 @@ async function init() {
 
   myvad.start();
 
-  // Init audio context on first user gesture for mic visualizer
-  // (browsers require user interaction to create AudioContext)
   const initAudio = () => {
     ensureAudioCtx();
     if (audioCtx.state === 'suspended') audioCtx.resume();
@@ -1006,12 +1231,9 @@ async function init() {
   };
   document.addEventListener('click', initAudio);
   document.addEventListener('keydown', initAudio);
-  // Also try immediately (may work if page had prior interaction)
   ensureAudioCtx();
 
   setState('listening');
-
-  // Start waveform loop
   drawWaveform();
 
   console.log('VAD initialized and listening');

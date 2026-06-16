@@ -21,3 +21,4 @@ default.profraw
 # IDE
 .idea/
 .vscode/
+.nano_claude
