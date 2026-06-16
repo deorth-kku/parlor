@@ -625,16 +625,13 @@ function connect() {
     const msg = JSON.parse(data);
     if (msg.type === 'text') {
       if (msg.transcription) {
-        const userMsgs = messagesDiv.querySelectorAll('.msg.user');
-        const lastUserMsg = userMsgs[userMsgs.length - 1];
-        if (lastUserMsg) {
-          const meta = lastUserMsg.querySelector('.meta');
-          lastUserMsg.innerHTML = `${msg.transcription}${meta ? meta.outerHTML : ''}`;
-        }
+        updateLatestUserMessage(msg.transcription);
       }
       activeAssistantMsg = addMessage('assistant', msg.text, `LLM ${msg.llm_time}s`);
     } else if (msg.type === 'text_start') {
       activeAssistantMsg = addMessage('assistant', '', '');
+    } else if (msg.type === 'transcription_delta') {
+      updateLatestUserMessage(msg.text);
     } else if (msg.type === 'text_delta') {
       if (activeAssistantMsg) {
         const meta = activeAssistantMsg.querySelector('.meta');
@@ -649,12 +646,7 @@ function connect() {
       }
     } else if (msg.type === 'text_end') {
       if (msg.transcription) {
-        const userMsgs = messagesDiv.querySelectorAll('.msg.user');
-        const lastUserMsg = userMsgs[userMsgs.length - 1];
-        if (lastUserMsg) {
-          const meta = lastUserMsg.querySelector('.meta');
-          lastUserMsg.innerHTML = `${msg.transcription}${meta ? meta.outerHTML : ''}`;
-        }
+        updateLatestUserMessage(msg.transcription);
       }
       if (activeAssistantMsg) {
         const meta = activeAssistantMsg.querySelector('.meta');
@@ -752,7 +744,7 @@ function handleSpeechEnd(audio) {
 
   setState('processing');
   setStatus('processing', 'Processing');
-  addMessage('user', '<span class="loading-dots"><span></span><span></span><span></span></span>', imageBase64 ? 'with camera' : '');
+  addMessage('user', '<span class="loading-dots"><span></span><span></span><span></span></span>', imageBase64 ? 'with camera' : '', true);
 
   const payload = { audio: wavBase64 };
   if (imageBase64) payload.image = imageBase64;
@@ -847,13 +839,38 @@ function queueAudioChunk(base64Pcm) {
 }
 
 // ── UI ──
-function addMessage(role, text, meta) {
+function addMessage(role, text, meta, isHtml = false) {
   const div = document.createElement('div');
   div.className = `msg ${role}`;
-  div.innerHTML = `${text}${meta ? `<div class="meta">${meta}</div>` : ''}`;
+  if (isHtml) {
+    div.innerHTML = text;
+  } else {
+    div.appendChild(document.createTextNode(text));
+  }
+  if (meta) {
+    const metaDiv = document.createElement('div');
+    metaDiv.className = 'meta';
+    metaDiv.textContent = meta;
+    div.appendChild(metaDiv);
+  }
   messagesDiv.appendChild(div);
   messagesDiv.scrollTop = messagesDiv.scrollHeight;
   return div;
+}
+
+function updateLatestUserMessage(text) {
+  const userMsgs = messagesDiv.querySelectorAll('.msg.user');
+  const lastUserMsg = userMsgs[userMsgs.length - 1];
+  if (!lastUserMsg) return;
+
+  const meta = lastUserMsg.querySelector('.meta');
+  for (const node of [...lastUserMsg.childNodes]) {
+    if (node !== meta) {
+      lastUserMsg.removeChild(node);
+    }
+  }
+  lastUserMsg.insertBefore(document.createTextNode(text), meta || null);
+  messagesDiv.scrollTop = messagesDiv.scrollHeight;
 }
 
 cameraToggle.addEventListener('click', () => {

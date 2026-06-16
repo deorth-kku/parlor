@@ -242,41 +242,12 @@ class OpenAICompatibleBackend:
             payload["max_tokens"] = self._config.max_tokens
         payload["response_format"] = self._schema()
 
-        async with self._client.stream("POST", "chat/completions", json=payload) as response:
-            if response.status_code >= 400:
-                body = await response.aread()
-                text = body.decode("utf-8", errors="ignore").lower()
-                if "response_format" in text or "json_schema" in text:
-                    fallback = dict(payload)
-                    fallback.pop("response_format", None)
-                    async with self._client.stream("POST", "chat/completions", json=fallback) as fallback_response:
-                        fallback_response.raise_for_status()
-                        raw_content = ""
-                        async for line in fallback_response.aiter_lines():
-                            if not line.startswith("data: "):
-                                continue
-                            data = line[6:]
-                            if data == "[DONE]":
-                                break
-                            chunk = json.loads(data)
-                            delta = chunk["choices"][0].get("delta", {}).get("content")
-                            if delta:
-                                raw_content += delta
-                                yield {"type": "delta", "delta": delta}
-                        if raw_content:
-                            parsed = _extract_json_payload(raw_content)
-                            parsed.setdefault("transcription", "")
-                            parsed.setdefault("response", "")
-                            parsed["_raw_content"] = raw_content
-                            parsed["_usage"] = {}
-                            yield {"type": "done", "parsed": parsed}
-                        return
-                response.raise_for_status()
-
+        async def emit_structured_stream(lines):
             raw_content = ""
             last_response_text = ""
+            last_transcription_text = ""
 
-            async for line in response.aiter_lines():
+            async for line in lines:
                 if not line.startswith("data: "):
                     continue
                 data = line[6:]
@@ -289,7 +260,17 @@ class OpenAICompatibleBackend:
                     continue
 
                 raw_content += delta
-                response_text, complete = _extract_json_string_field(raw_content, "response")
+
+                transcription_text, transcription_complete = _extract_json_string_field(raw_content, "transcription")
+                if transcription_text is not None and transcription_text != last_transcription_text:
+                    last_transcription_text = transcription_text
+                    yield {
+                        "type": "transcription",
+                        "text": transcription_text,
+                        "complete": transcription_complete,
+                    }
+
+                response_text, response_complete = _extract_json_string_field(raw_content, "response")
                 if response_text is not None:
                     if response_text.startswith(last_response_text):
                         new_text = response_text[len(last_response_text):]
@@ -297,7 +278,7 @@ class OpenAICompatibleBackend:
                         new_text = response_text
                     if new_text:
                         last_response_text = response_text
-                        yield {"type": "delta", "delta": new_text, "complete": complete}
+                        yield {"type": "delta", "delta": new_text, "complete": response_complete}
 
             parsed = _extract_json_payload(raw_content)
             parsed.setdefault("transcription", "")
@@ -305,3 +286,20 @@ class OpenAICompatibleBackend:
             parsed["_raw_content"] = raw_content
             parsed["_usage"] = {}
             yield {"type": "done", "parsed": parsed}
+
+        async with self._client.stream("POST", "chat/completions", json=payload) as response:
+            if response.status_code >= 400:
+                body = await response.aread()
+                text = body.decode("utf-8", errors="ignore").lower()
+                if "response_format" in text or "json_schema" in text:
+                    fallback = dict(payload)
+                    fallback.pop("response_format", None)
+                    async with self._client.stream("POST", "chat/completions", json=fallback) as fallback_response:
+                        fallback_response.raise_for_status()
+                        async for event in emit_structured_stream(fallback_response.aiter_lines()):
+                            yield event
+                        return
+                response.raise_for_status()
+
+            async for event in emit_structured_stream(response.aiter_lines()):
+                yield event

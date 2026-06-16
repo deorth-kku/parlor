@@ -274,6 +274,20 @@ async def websocket_endpoint(ws: WebSocket):
                             pending_sentences.extend(new_sentences)
                             await flush_pending_sentences()
 
+                    elif event["type"] == "transcription":
+                        transcription = str(event["text"]).replace('<|"|>', "").strip()
+                        if transcription:
+                            assistant_transcription = transcription
+                            await ws.send_text(
+                                json.dumps(
+                                    {
+                                        "type": "transcription_delta",
+                                        "text": transcription,
+                                        "complete": bool(event.get("complete", False)),
+                                    }
+                                )
+                            )
+
                     elif event["type"] == "done":
                         parsed = event["parsed"]
                         assistant_transcription = str(parsed.get("transcription", "")).strip()
