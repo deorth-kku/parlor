@@ -762,7 +762,7 @@ function refreshElements() {
 }
 refreshElements();
 
-let ws, mediaStream, myvad;
+let ws, mediaStream, myvad, audioStream;
 let cameraEnabled = true;
 let audioCtx, currentSource;
 let state = 'loading';
@@ -779,7 +779,15 @@ let streamSources = [];
 let streamTtsTime = null;
 
 // ── Waveform Visualizer ──
-let analyser, micSource;
+let analyser;
+let micSource = null;
+
+function getMicSource() {
+  if (!micSource && audioStream && audioStream.getAudioTracks().length) {
+    micSource = audioCtx.createMediaStreamSource(audioStream);
+  }
+  return micSource;
+}
 const BAR_COUNT = 40;
 const BAR_GAP = 3;
 let waveformRAF;
@@ -921,13 +929,10 @@ function setState(newState) {
     myvad.setOptions({ positiveSpeechThreshold: newState === 'speaking' ? 0.92 : 0.5 });
   }
 
-  if (newState === 'listening' && mediaStream && audioCtx && analyser) {
-    if (!micSource) {
-      micSource = audioCtx.createMediaStreamSource(mediaStream);
-    }
-    try { micSource.connect(analyser); } catch {}
-  } else if (micSource && newState !== 'listening') {
-    try { micSource.disconnect(analyser); } catch {}
+  if (newState === 'listening' && analyser) {
+    try { getMicSource().connect(analyser); } catch {}
+  } else {
+    try { getMicSource().disconnect(analyser); } catch {}
   }
 }
 
@@ -1046,17 +1051,17 @@ async function switchVideoSource(source) {
   if (source === videoSource) return;
   await stopStream();
   if (source === 'off') {
-    videoSource = 'off';
+    mediaStream = null; videoSource = 'off';
     video.classList.remove('mirror');
   } else if (source === 'screen') {
     try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({ video: { cursor: 'always' }, audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: { cursor: 'always' } });
       mediaStream = stream; video.srcObject = stream; videoSource = 'screen';
       video.classList.remove('mirror');
     } catch (e) { console.warn('Screen share failed:', e.message); }
   } else {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: source } }, audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: source } } });
       mediaStream = stream; video.srcObject = stream; videoSource = source; currentCameraId = source;
       video.classList.add('mirror'); // default mirror for all cameras
     } catch (e) { console.warn('Camera start failed:', e.message); }
@@ -1136,12 +1141,16 @@ function stopPlayback() {
   streamNextTime = 0;
 }
 
-function ensureAudioCtx() {
+async function ensureAudioCtx() {
   if (!audioCtx) {
     audioCtx = new AudioContext();
     analyser = audioCtx.createAnalyser();
     analyser.fftSize = 256;
     analyser.smoothingTimeConstant = 0.75;
+    try {
+      audioStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+      getMicSource().connect(analyser);
+    } catch (e) { console.warn('Mic capture failed:', e.message); }
   }
 }
 
@@ -1250,9 +1259,7 @@ async function init() {
 
   myvad = await vad.MicVAD.new({
     getStream: async () => {
-      if (mediaStream && mediaStream.getAudioTracks().length) {
-        return new MediaStream(mediaStream.getAudioTracks());
-      }
+      if (audioStream) { return audioStream; }
       try { return await navigator.mediaDevices.getUserMedia({ audio: true }); } catch { return new MediaStream(); }
     },
     positiveSpeechThreshold: 0.5,
@@ -1270,10 +1277,11 @@ async function init() {
   myvad.start();
 
   const initAudio = () => {
-    ensureAudioCtx();
-    if (audioCtx.state === 'suspended') audioCtx.resume();
-    document.removeEventListener('click', initAudio);
-    document.removeEventListener('keydown', initAudio);
+    ensureAudioCtx().then(() => {
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      document.removeEventListener('click', initAudio);
+      document.removeEventListener('keydown', initAudio);
+    });
   };
   document.addEventListener('click', initAudio);
   document.addEventListener('keydown', initAudio);
