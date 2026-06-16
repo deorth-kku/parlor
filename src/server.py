@@ -20,8 +20,8 @@ import tts
 from dotenv import load_dotenv
 load_dotenv()
 
-HF_REPO = "litert-community/gemma-4-E2B-it-litert-lm"
-HF_FILENAME = "gemma-4-E2B-it.litertlm"
+HF_REPO = "litert-community/gemma-4-E4B-it-litert-lm"
+HF_FILENAME = "gemma-4-E4B-it.litertlm"
 
 
 def resolve_model_path() -> str:
@@ -35,10 +35,8 @@ def resolve_model_path() -> str:
 
 MODEL_PATH = resolve_model_path()
 SYSTEM_PROMPT = (
-    "You are a friendly, conversational AI assistant. The user is talking to you "
-    "through a microphone and showing you their camera. "
-    "You MUST always use the respond_to_user tool to reply. "
-    "First transcribe exactly what the user said, then write your response."
+    "あなたは、親しみやすく会話型のAIアシスタントです。ユーザーはマイクを通してあなたに話しかけ、カメラの映像を見せています。"
+    "まず、ユーザーの発言を正確に書き起こし、それから応答を作成してください。"
 )
 
 SENTENCE_SPLIT_RE = re.compile(r'(?<=[.!?])\s+')
@@ -49,7 +47,7 @@ tts_backend = None
 
 def load_models():
     global engine, tts_backend
-    print(f"Loading Gemma 4 E2B from {MODEL_PATH}...")
+    print(f"Loading Gemma 4 E4B from {MODEL_PATH}...")
     engine = litert_lm.Engine(
         MODEL_PATH,
         backend=litert_lm.Backend.GPU,
@@ -79,7 +77,7 @@ def split_sentences(text: str) -> list[str]:
 
 @app.get("/")
 async def root():
-    return HTMLResponse(content=(Path(__file__).parent / "index.html").read_text())
+    return HTMLResponse(content=(Path(__file__).parent / "index.html").read_text(encoding="utf-8"))
 
 
 @app.websocket("/ws")
