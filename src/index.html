@@ -388,10 +388,11 @@
     object-fit: cover;
     border-radius: 18px;
     background: #0a0a10;
-    transform: scaleX(-1);
     position: relative;
     z-index: 2;
   }
+
+  video.mirror { transform: scaleX(-1); }
 
   /* ── Waveform canvas ── */
   .waveform-wrap {
@@ -639,8 +640,11 @@
     </div>
 
     <div class="side-section">
-      <h3>Camera</h3>
-      <button id="cameraToggle" class="ctrl-btn active">Camera On</button>
+      <h3>Input Source</h3>
+      <div class="side-selector">
+        <label for="inputSourceSelect">Source</label>
+        <select id="inputSourceSelect"></select>
+      </div>
     </div>
 
     <div class="side-section">
@@ -714,7 +718,10 @@
 
     <!-- Controls -->
     <div class="controls">
-      <button id="cameraToggle" class="ctrl-btn active">Camera On</button>
+      <div class="side-selector" style="flex: 1;">
+        <label for="inputSourceSelect">Input</label>
+        <select id="inputSourceSelect"></select>
+      </div>
       <div class="state-indicator">
         <div id="stateDot" class="dot loading"></div>
         <span id="stateText">Loading...</span>
@@ -737,12 +744,12 @@ function $$(id) {
   if (el) return el;
   return document.getElementById(id);
 }
-let video, cameraToggle, languageSelect, voiceSelect, messagesDiv, statusEl;
+let video, inputSourceSelect, languageSelect, voiceSelect, messagesDiv, statusEl;
 let stateDot, stateText, viewportWrap, waveformCanvas, waveformCtx;
 
 function refreshElements() {
   video = $$('video');
-  cameraToggle = $$('cameraToggle');
+  inputSourceSelect = $$('inputSourceSelect');
   languageSelect = $$('languageSelect');
   voiceSelect = $$('voiceSelect');
   messagesDiv = $$('messages');
@@ -998,29 +1005,63 @@ function connect() {
 
 function setStatus(cls, text) { statusEl.className = `status-pill ${cls}`; statusEl.textContent = text; }
 
-// ── Camera ──
-async function startCamera() {
-  try {
-    mediaStream = await navigator.mediaDevices.getUserMedia({
-      video: { width: 640, height: 480, facingMode: 'user' },
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-    });
-    video.srcObject = mediaStream;
-    return;
-  } catch (e) { console.warn('Video+audio failed:', e.message); }
+// ── Video Source Switching ──
+let videoSource = 'off';
+let currentCameraId = null;
 
-  const streams = await Promise.allSettled([
-    navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: 'user' } }),
-    navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }),
-  ]);
-  mediaStream = new MediaStream();
-  streams.forEach(r => { if (r.status === 'fulfilled') r.value.getTracks().forEach(t => mediaStream.addTrack(t)); });
-  if (mediaStream.getVideoTracks().length) video.srcObject = mediaStream;
-  if (!mediaStream.getAudioTracks().length) { cameraEnabled = false; }
+async function enumerateVideoDevices() {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const videoInputs = devices.filter(d => d.kind === 'videoinput');
+    const select = inputSourceSelect;
+    select.innerHTML = '';
+    const offOpt = document.createElement('option');
+    offOpt.value = 'off';
+    offOpt.textContent = 'Off';
+    select.appendChild(offOpt);
+    for (const device of videoInputs) {
+      const opt = document.createElement('option');
+      opt.value = device.deviceId;
+      opt.textContent = device.label || 'Camera ' + (videoInputs.indexOf(device) + 1);
+      select.appendChild(opt);
+    }
+    const screenOpt = document.createElement('option');
+    screenOpt.value = 'screen';
+    screenOpt.textContent = 'Screen Share';
+    select.appendChild(screenOpt);
+    if (select.querySelector('option[value="' + videoSource + '"]')) {
+      select.value = videoSource;
+    }
+  } catch (e) { console.warn('Enumerate devices failed:', e.message); }
+}
+
+async function stopStream() {
+  if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; video.srcObject = null; }
+}
+
+async function switchVideoSource(source) {
+  if (source === videoSource) return;
+  await stopStream();
+  if (source === 'off') {
+    videoSource = 'off';
+    video.classList.remove('mirror');
+  } else if (source === 'screen') {
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: { cursor: 'always' }, audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+      mediaStream = stream; video.srcObject = stream; videoSource = 'screen';
+      video.classList.remove('mirror');
+    } catch (e) { console.warn('Screen share failed:', e.message); }
+  } else {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: source } }, audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+      mediaStream = stream; video.srcObject = stream; videoSource = source; currentCameraId = source;
+      video.classList.add('mirror');
+    } catch (e) { console.warn('Camera start failed:', e.message); }
+  }
 }
 
 function captureFrame() {
-  if (!cameraEnabled || !video.videoWidth) return null;
+  if (videoSource === 'off' || !video.videoWidth) return null;
   const canvas = document.createElement('canvas');
   const scale = 320 / video.videoWidth;
   canvas.width = 320; canvas.height = video.videoHeight * scale;
@@ -1181,11 +1222,8 @@ function updateLatestUserMessage(text) {
   messagesDiv.scrollTop = messagesDiv.scrollHeight;
 }
 
-cameraToggle.addEventListener('click', () => {
-  cameraEnabled = !cameraEnabled;
-  cameraToggle.classList.toggle('active', cameraEnabled);
-  cameraToggle.textContent = cameraEnabled ? 'Camera On' : 'Camera Off';
-  video.style.opacity = cameraEnabled ? 1 : 0.3;
+inputSourceSelect.addEventListener('change', () => {
+  switchVideoSource(inputSourceSelect.value);
 });
 
 // ── Init ──
@@ -1204,11 +1242,16 @@ async function init() {
     selectedVoice = voiceSelect.value;
   });
 
-  await startCamera();
+  await enumerateVideoDevices();
   connect();
 
   myvad = await vad.MicVAD.new({
-    getStream: async () => new MediaStream(mediaStream.getAudioTracks()),
+    getStream: async () => {
+      if (mediaStream && mediaStream.getAudioTracks().length) {
+        return new MediaStream(mediaStream.getAudioTracks());
+      }
+      try { return await navigator.mediaDevices.getUserMedia({ audio: true }); } catch { return new MediaStream(); }
+    },
     positiveSpeechThreshold: 0.5,
     negativeSpeechThreshold: 0.25,
     redemptionMs: 600,
