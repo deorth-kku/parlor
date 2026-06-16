@@ -955,6 +955,8 @@ function connect() {
       }
       activeAssistantMsg = addMessage('assistant', msg.text, `LLM ${msg.llm_time}s`);
     } else if (msg.type === 'text_start') {
+      // A new assistant turn has started, so we can stop ignoring stale audio from the interrupted one.
+      ignoreIncomingAudio = false;
       activeAssistantMsg = addMessage('assistant', '', '');
     } else if (msg.type === 'transcription_delta') {
       updateLatestUserMessage(msg.text);
