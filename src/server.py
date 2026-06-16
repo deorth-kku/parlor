@@ -10,6 +10,7 @@ import re
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import uvicorn
@@ -28,7 +29,7 @@ SYSTEM_PROMPT = (
     "Return concise answers and keep responses to 1-4 short sentences."
 )
 
-SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+SENTENCE_END_RE = re.compile(r"[.!?。！？]")
 
 backend: OpenAICompatibleBackend | None = None
 tts_backend = None
@@ -52,12 +53,6 @@ async def lifespan(app):
 
 
 app = FastAPI(lifespan=lifespan)
-
-
-def split_sentences(text: str) -> list[str]:
-    """Split text into sentences for streaming TTS."""
-    parts = SENTENCE_SPLIT_RE.split(text.strip())
-    return [s.strip() for s in parts if s.strip()]
 
 
 def build_user_content(msg: dict[str, object]) -> list[dict[str, object]] | str:
@@ -103,6 +98,96 @@ def build_user_content(msg: dict[str, object]) -> list[dict[str, object]] | str:
     return parts if (msg.get("audio") or msg.get("image")) else parts[0]["text"]
 
 
+def append_sentence_buffer(buffer: str, chunk: str) -> tuple[str, list[str]]:
+    text = buffer + chunk
+    sentences: list[str] = []
+    start = 0
+    for match in SENTENCE_END_RE.finditer(text):
+        end = match.end()
+        sentence = text[start:end].strip()
+        if sentence:
+            sentences.append(sentence)
+        start = end
+        while start < len(text) and text[start].isspace():
+            start += 1
+    return text[start:], sentences
+
+
+def json_string_field_is_closed(text: str, field_name: str) -> tuple[str | None, bool]:
+    marker = f'"{field_name}"'
+    start = text.find(marker)
+    if start == -1:
+        return None, False
+    colon = text.find(":", start + len(marker))
+    if colon == -1:
+        return None, False
+    i = colon + 1
+    while i < len(text) and text[i].isspace():
+        i += 1
+    if i >= len(text) or text[i] != '"':
+        return None, False
+    i += 1
+    out: list[str] = []
+    escape = False
+    unicode_digits = ""
+    while i < len(text):
+        ch = text[i]
+        if unicode_digits:
+            if ch.lower() in "0123456789abcdef":
+                unicode_digits += ch
+                if len(unicode_digits) == 4:
+                    out.append(chr(int(unicode_digits, 16)))
+                    unicode_digits = ""
+                    escape = False
+                i += 1
+                continue
+            return "".join(out), False
+        if escape:
+            mapping = {
+                '"': '"',
+                "\\": "\\",
+                "/": "/",
+                "b": "\b",
+                "f": "\f",
+                "n": "\n",
+                "r": "\r",
+                "t": "\t",
+            }
+            if ch == "u":
+                unicode_digits = ""
+                i += 1
+                continue
+            if ch not in mapping:
+                return "".join(out), False
+            out.append(mapping[ch])
+            escape = False
+            i += 1
+            continue
+        if ch == "\\":
+            escape = True
+            i += 1
+            continue
+        if ch == '"':
+            return "".join(out), True
+        out.append(ch)
+        i += 1
+    return "".join(out), False
+
+
+async def speak_sentence(ws: WebSocket, sentence: str, index: int) -> None:
+    pcm = await asyncio.get_event_loop().run_in_executor(None, lambda s=sentence: tts_backend.generate(s))
+    pcm_int16 = (pcm * 32767).clip(-32768, 32767).astype(np.int16)
+    await ws.send_text(
+        json.dumps(
+            {
+                "type": "audio_chunk",
+                "audio": base64.b64encode(pcm_int16.tobytes()).decode(),
+                "index": index,
+            }
+        )
+    )
+
+
 @app.get("/")
 async def root():
     return HTMLResponse(content=(Path(__file__).parent / "index.html").read_text(encoding="utf-8"))
@@ -117,7 +202,7 @@ async def websocket_endpoint(ws: WebSocket):
         return
 
     interrupted = asyncio.Event()
-    msg_queue = asyncio.Queue()
+    msg_queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
     history: list[dict[str, object]] = [{"role": "system", "content": SYSTEM_PROMPT}]
 
     async def receiver():
@@ -143,85 +228,107 @@ async def websocket_endpoint(ws: WebSocket):
 
             interrupted.clear()
             user_content = build_user_content(msg)
+            history.append({"role": "user", "content": user_content})
 
             t0 = time.time()
-            response = await backend.complete_turn(history, user_content=user_content)
-            llm_time = time.time() - t0
+            stream = backend.stream_turn(history[:-1], user_content=user_content)
 
-            transcription = str(response.get("transcription", "")).strip()
-            text_response = str(response.get("response", "")).strip()
-            if not text_response:
-                text_response = str(response.get("_raw_content", "")).strip() or "Okay."
+            assistant_text = ""
+            assistant_transcription = ""
+            pending_text = ""
+            pending_sentences: list[str] = []
+            tts_started = False
+            sentence_index = 0
 
-            if transcription:
-                transcription = transcription.replace('<|"|>', "").strip()
-                print(f"LLM ({llm_time:.2f}s) [json] heard: {transcription!r} -> {text_response}")
-            else:
-                print(f"LLM ({llm_time:.2f}s) [json]: {text_response}")
+            async def flush_pending_sentences() -> None:
+                nonlocal sentence_index, tts_started
+                while pending_sentences and not interrupted.is_set():
+                    if not tts_started:
+                        tts_started = True
+                        await ws.send_text(
+                            json.dumps(
+                                {
+                                    "type": "audio_start",
+                                    "sample_rate": tts_backend.sample_rate,
+                                    "sentence_count": 0,
+                                }
+                            )
+                        )
+                    sentence = pending_sentences.pop(0)
+                    await speak_sentence(ws, sentence, sentence_index)
+                    sentence_index += 1
 
-            history.append({"role": "user", "content": user_content})
-            history.append({"role": "assistant", "content": text_response})
+            try:
+                await ws.send_text(json.dumps({"type": "text_start"}))
+                async for event in stream:
+                    if interrupted.is_set():
+                        break
+
+                    if event["type"] == "delta":
+                        delta = str(event["delta"])
+                        assistant_text += delta
+                        await ws.send_text(json.dumps({"type": "text_delta", "delta": delta}))
+
+                        pending_text, new_sentences = append_sentence_buffer(pending_text, delta)
+                        if new_sentences:
+                            pending_sentences.extend(new_sentences)
+                            await flush_pending_sentences()
+
+                    elif event["type"] == "done":
+                        parsed = event["parsed"]
+                        assistant_transcription = str(parsed.get("transcription", "")).strip()
+                        final_response = str(parsed.get("response", "")).strip()
+                        if final_response and final_response != assistant_text:
+                            assistant_text = final_response
+                        if assistant_transcription:
+                            assistant_transcription = assistant_transcription.replace('<|"|>', "").strip()
+
+                if pending_text.strip():
+                    pending_sentences.append(pending_text.strip())
+                    pending_text = ""
+                if pending_sentences and not interrupted.is_set():
+                    await flush_pending_sentences()
+
+            finally:
+                llm_time = time.time() - t0
 
             if interrupted.is_set():
                 print("Interrupted after LLM, skipping response")
                 continue
 
-            reply = {"type": "text", "text": text_response, "llm_time": round(llm_time, 2)}
-            if transcription:
-                reply["transcription"] = transcription
-            await ws.send_text(json.dumps(reply))
+            history.append({"role": "assistant", "content": assistant_text or "Okay."})
 
-            if interrupted.is_set():
-                print("Interrupted before TTS, skipping audio")
-                continue
+            print(f"LLM ({llm_time:.2f}s) [stream]: {assistant_transcription!r} -> {assistant_text}")
 
-            sentences = split_sentences(text_response)
-            if not sentences:
-                sentences = [text_response]
-
-            tts_start = time.time()
             await ws.send_text(
                 json.dumps(
                     {
-                        "type": "audio_start",
-                        "sample_rate": tts_backend.sample_rate,
-                        "sentence_count": len(sentences),
+                        "type": "text_end",
+                        "text": assistant_text or "Okay.",
+                        "llm_time": round(llm_time, 2),
+                        **({"transcription": assistant_transcription} if assistant_transcription else {}),
                     }
                 )
             )
 
-            for i, sentence in enumerate(sentences):
-                if interrupted.is_set():
-                    print(f"Interrupted during TTS (sentence {i + 1}/{len(sentences)})")
-                    break
-
-                pcm = await asyncio.get_event_loop().run_in_executor(
-                    None, lambda s=sentence: tts_backend.generate(s)
-                )
-
-                if interrupted.is_set():
-                    break
-
-                pcm_int16 = (pcm * 32767).clip(-32768, 32767).astype(np.int16)
+            if not tts_started:
                 await ws.send_text(
                     json.dumps(
                         {
-                            "type": "audio_chunk",
-                            "audio": base64.b64encode(pcm_int16.tobytes()).decode(),
-                            "index": i,
+                            "type": "audio_start",
+                            "sample_rate": tts_backend.sample_rate,
+                            "sentence_count": 0,
                         }
                     )
                 )
-
-            tts_time = time.time() - tts_start
-            print(f"TTS ({tts_time:.2f}s): {len(sentences)} sentences")
+                tts_started = True
 
             if not interrupted.is_set():
                 await ws.send_text(
                     json.dumps(
                         {
                             "type": "audio_end",
-                            "tts_time": round(tts_time, 2),
+                            "tts_time": 0 if sentence_index == 0 else round(time.time() - t0, 2),
                         }
                     )
                 )

@@ -469,6 +469,7 @@ let cameraEnabled = true;
 let audioCtx, currentSource;
 let state = 'loading';
 let ignoreIncomingAudio = false;
+let activeAssistantMsg = null;
 
 // Streaming audio playback state
 let streamSampleRate = 24000;
@@ -631,7 +632,43 @@ function connect() {
           lastUserMsg.innerHTML = `${msg.transcription}${meta ? meta.outerHTML : ''}`;
         }
       }
-      addMessage('assistant', msg.text, `LLM ${msg.llm_time}s`);
+      activeAssistantMsg = addMessage('assistant', msg.text, `LLM ${msg.llm_time}s`);
+    } else if (msg.type === 'text_start') {
+      activeAssistantMsg = addMessage('assistant', '', '');
+    } else if (msg.type === 'text_delta') {
+      if (activeAssistantMsg) {
+        const meta = activeAssistantMsg.querySelector('.meta');
+        const current = activeAssistantMsg.childNodes[0];
+        if (current && current.nodeType === Node.TEXT_NODE) {
+          current.textContent += msg.delta;
+        } else {
+          activeAssistantMsg.insertBefore(document.createTextNode(msg.delta), meta || null);
+        }
+      } else {
+        activeAssistantMsg = addMessage('assistant', msg.delta, '');
+      }
+    } else if (msg.type === 'text_end') {
+      if (msg.transcription) {
+        const userMsgs = messagesDiv.querySelectorAll('.msg.user');
+        const lastUserMsg = userMsgs[userMsgs.length - 1];
+        if (lastUserMsg) {
+          const meta = lastUserMsg.querySelector('.meta');
+          lastUserMsg.innerHTML = `${msg.transcription}${meta ? meta.outerHTML : ''}`;
+        }
+      }
+      if (activeAssistantMsg) {
+        const meta = activeAssistantMsg.querySelector('.meta');
+        const textNode = activeAssistantMsg.childNodes[0];
+        if (textNode && textNode.nodeType === Node.TEXT_NODE) {
+          textNode.textContent = msg.text;
+        } else {
+          activeAssistantMsg.insertBefore(document.createTextNode(msg.text), meta || null);
+        }
+        if (meta) meta.textContent = `LLM ${msg.llm_time}s`;
+      } else {
+        activeAssistantMsg = addMessage('assistant', msg.text, `LLM ${msg.llm_time}s`);
+      }
+      activeAssistantMsg = null;
     } else if (msg.type === 'audio_start') {
       if (ignoreIncomingAudio) return;
       streamSampleRate = msg.sample_rate || 24000;
@@ -816,6 +853,7 @@ function addMessage(role, text, meta) {
   div.innerHTML = `${text}${meta ? `<div class="meta">${meta}</div>` : ''}`;
   messagesDiv.appendChild(div);
   messagesDiv.scrollTop = messagesDiv.scrollHeight;
+  return div;
 }
 
 cameraToggle.addEventListener('click', () => {

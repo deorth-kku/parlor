@@ -42,6 +42,79 @@ def _extract_json_payload(text: str) -> dict[str, Any]:
         raise
 
 
+def _extract_json_string_field(text: str, field_name: str) -> tuple[str | None, bool]:
+    """Return the current value of a JSON string field if present.
+
+    The second return value indicates whether the closing quote has been seen.
+    """
+
+    marker = f'"{field_name}"'
+    start = text.find(marker)
+    if start == -1:
+        return None, False
+
+    colon = text.find(":", start + len(marker))
+    if colon == -1:
+        return None, False
+
+    i = colon + 1
+    while i < len(text) and text[i].isspace():
+        i += 1
+    if i >= len(text) or text[i] != '"':
+        return None, False
+
+    i += 1
+    out: list[str] = []
+    escape = False
+    unicode_digits = ""
+
+    while i < len(text):
+        ch = text[i]
+        if unicode_digits:
+            if ch.lower() in "0123456789abcdef":
+                unicode_digits += ch
+                if len(unicode_digits) == 4:
+                    out.append(chr(int(unicode_digits, 16)))
+                    unicode_digits = ""
+                    escape = False
+                i += 1
+                continue
+            return "".join(out), False
+
+        if escape:
+            mapping = {
+                '"': '"',
+                "\\": "\\",
+                "/": "/",
+                "b": "\b",
+                "f": "\f",
+                "n": "\n",
+                "r": "\r",
+                "t": "\t",
+            }
+            if ch == "u":
+                unicode_digits = ""
+                i += 1
+                continue
+            if ch not in mapping:
+                return "".join(out), False
+            out.append(mapping[ch])
+            escape = False
+            i += 1
+            continue
+
+        if ch == "\\":
+            escape = True
+            i += 1
+            continue
+        if ch == '"':
+            return "".join(out), True
+        out.append(ch)
+        i += 1
+
+    return "".join(out), False
+
+
 class OpenAICompatibleBackend:
     def __init__(self, config: OpenAIBackendConfig):
         headers = {}
@@ -147,3 +220,88 @@ class OpenAICompatibleBackend:
         parsed["_raw_content"] = content
         parsed["_usage"] = data.get("usage", {})
         return parsed
+
+    async def stream_turn(
+        self,
+        history: list[dict[str, Any]],
+        *,
+        user_content: str | list[dict[str, Any]],
+    ):
+        payload: dict[str, Any] = {
+            "messages": [*history, {"role": "user", "content": user_content}],
+            "temperature": self._config.temperature,
+            "reasoning_format": "none",
+            "chat_template_kwargs": {
+                "enable_thinking": False,
+            },
+            "stream": True,
+        }
+        if self._config.model:
+            payload["model"] = self._config.model
+        if self._config.max_tokens is not None:
+            payload["max_tokens"] = self._config.max_tokens
+        payload["response_format"] = self._schema()
+
+        async with self._client.stream("POST", "chat/completions", json=payload) as response:
+            if response.status_code >= 400:
+                body = await response.aread()
+                text = body.decode("utf-8", errors="ignore").lower()
+                if "response_format" in text or "json_schema" in text:
+                    fallback = dict(payload)
+                    fallback.pop("response_format", None)
+                    async with self._client.stream("POST", "chat/completions", json=fallback) as fallback_response:
+                        fallback_response.raise_for_status()
+                        raw_content = ""
+                        async for line in fallback_response.aiter_lines():
+                            if not line.startswith("data: "):
+                                continue
+                            data = line[6:]
+                            if data == "[DONE]":
+                                break
+                            chunk = json.loads(data)
+                            delta = chunk["choices"][0].get("delta", {}).get("content")
+                            if delta:
+                                raw_content += delta
+                                yield {"type": "delta", "delta": delta}
+                        if raw_content:
+                            parsed = _extract_json_payload(raw_content)
+                            parsed.setdefault("transcription", "")
+                            parsed.setdefault("response", "")
+                            parsed["_raw_content"] = raw_content
+                            parsed["_usage"] = {}
+                            yield {"type": "done", "parsed": parsed}
+                        return
+                response.raise_for_status()
+
+            raw_content = ""
+            last_response_text = ""
+
+            async for line in response.aiter_lines():
+                if not line.startswith("data: "):
+                    continue
+                data = line[6:]
+                if data == "[DONE]":
+                    break
+
+                chunk = json.loads(data)
+                delta = chunk["choices"][0].get("delta", {}).get("content")
+                if not delta:
+                    continue
+
+                raw_content += delta
+                response_text, complete = _extract_json_string_field(raw_content, "response")
+                if response_text is not None:
+                    if response_text.startswith(last_response_text):
+                        new_text = response_text[len(last_response_text):]
+                    else:
+                        new_text = response_text
+                    if new_text:
+                        last_response_text = response_text
+                        yield {"type": "delta", "delta": new_text, "complete": complete}
+
+            parsed = _extract_json_payload(raw_content)
+            parsed.setdefault("transcription", "")
+            parsed.setdefault("response", "")
+            parsed["_raw_content"] = raw_content
+            parsed["_usage"] = {}
+            yield {"type": "done", "parsed": parsed}
