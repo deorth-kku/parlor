@@ -224,9 +224,12 @@ async def tts_options():
 
 @app.get("/api/model")
 async def model_info():
-    if backend is None or backend._config.model is None:
+    if backend is None:
         return {"model": "auto"}
-    return {"model": backend._config.model}
+    if backend._config.model is not None:
+        return {"model": backend._config.model}
+    resolved = await backend.resolve_model()
+    return {"model": resolved or "auto"}
 
 
 @app.websocket("/ws")
