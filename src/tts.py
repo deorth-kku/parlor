@@ -43,7 +43,7 @@ class ONNXBackend(TTSBackend):
 
         self._en_us = en.G2P(trf=False, british=False, fallback=espeak.EspeakFallback(british=False))
         self._en_uk = en.G2P(trf=False, british=True, fallback=espeak.EspeakFallback(british=True))
-        self._ja = ja.JAG2P()
+        self._ja = ja.JAG2P(version='pyopenjtalk')
         self._zh = zh.ZHG2P(version="1.1", en_callable=lambda text: self._en_us(text)[0])
 
         self._runtimes = {
@@ -91,14 +91,19 @@ class ONNXBackend(TTSBackend):
             pcm, _sr = runtime.model.create(phonemes, voice=voice, speed=speed, is_phonemes=True)
         elif language == "ja":
             phonemes, _ = runtime.g2p(text)
+            phonemes = zipja(phonemes)
             pcm, _sr = runtime.model.create(phonemes, voice=voice, speed=speed, is_phonemes=True)
         else:
             phonemes, _ = runtime.g2p(text)
             pcm, _sr = runtime.model.create(phonemes, voice=voice, speed=speed, is_phonemes=True)
 
-        print(f"tts language={language} voice={voice} elapsed={time.time() - t0:.2f}s")
+        print(f"tts language={language} voice={voice} elapsed={time.time() - t0:.2f}s text=\"{text}\" pho={phonemes}")
         return pcm
-
+    
+def zipja(s: str):
+    half = len(s) // 2
+    return s[:half]
+    return "".join(a + b for a, b in zip(s[:half], s[half:]))
 
 def load() -> TTSBackend:
     """Load the TTS backend."""
