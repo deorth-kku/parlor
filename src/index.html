@@ -820,6 +820,13 @@ function getStateColor() {
   return colors[state] || colors.loading;
 }
 
+function saveTtsSelection(languageCode, voice) {
+  try {
+    localStorage.setItem('tts_language', languageCode);
+    localStorage.setItem('tts_voice', voice);
+  } catch {}
+}
+
 function renderLanguageOptions() {
   languageSelect.innerHTML = '';
   for (const language of ttsOptions.languages) {
@@ -844,10 +851,20 @@ function renderVoiceOptions(languageCode, preferredVoice = null) {
   selectedVoice = voiceSelect.value;
 }
 
+function loadTtsSelection() {
+  try {
+    const lang = localStorage.getItem('tts_language');
+    const voice = localStorage.getItem('tts_voice');
+    if (lang && voice) return { languageCode: lang, voice };
+  } catch {}
+  return null;
+}
+
 function setTtsSelection(languageCode, voice) {
   selectedLanguage = languageCode;
   languageSelect.value = languageCode;
   renderVoiceOptions(languageCode, voice);
+  saveTtsSelection(languageCode, voice);
 }
 
 function drawWaveform() {
@@ -1286,13 +1303,20 @@ async function init() {
   const modelLabel = document.getElementById('modelLabel');
   if (modelLabel) modelLabel.textContent = modelInfo.model || 'OpenAI-compatible backend';
   renderLanguageOptions();
-  setTtsSelection(ttsOptions.default_language, ttsOptions.default_voice);
+  const saved = loadTtsSelection();
+  if (saved) {
+    setTtsSelection(saved.languageCode, saved.voice);
+  } else {
+    setTtsSelection(ttsOptions.default_language, ttsOptions.default_voice);
+  }
   languageSelect.addEventListener('change', () => {
     selectedLanguage = languageSelect.value;
     renderVoiceOptions(selectedLanguage);
+    saveTtsSelection(selectedLanguage, selectedVoice);
   });
   voiceSelect.addEventListener('change', () => {
     selectedVoice = voiceSelect.value;
+    saveTtsSelection(selectedLanguage, selectedVoice);
   });
 
   await enumerateVideoDevices();
