@@ -262,6 +262,22 @@
     padding: 10px 12px;
     background: rgba(255,255,255,0.02);
     border-radius: 10px;
+    border: 1px solid transparent;
+    appearance: none;
+    width: 100%;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .state-indicator:hover {
+    color: var(--c-text);
+    background: rgba(255,255,255,0.04);
+  }
+
+  .state-indicator.paused {
+    color: #fca5a5;
+    background: rgba(248,113,113,0.08);
+    border-color: rgba(248,113,113,0.18);
   }
 
   .state-indicator .dot {
@@ -276,6 +292,11 @@
   .state-indicator .dot.processing { animation: dot-pulse 0.6s ease-in-out infinite; }
   .state-indicator .dot.speaking { animation: dot-pulse 1s ease-in-out infinite; }
   .state-indicator .dot.loading { animation: dot-pulse 2.5s ease-in-out infinite; }
+  .state-indicator .dot.muted {
+    animation: none;
+    background: #f87171;
+    box-shadow: 0 0 8px rgba(248,113,113,0.22);
+  }
 
   @keyframes dot-pulse {
     0%, 100% { opacity: 1; transform: scale(1); }
@@ -471,6 +492,24 @@
     -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 12px, black 100%);
   }
 
+  body.layout-no-video .viewport-wrap {
+    display: none;
+  }
+
+  body.layout-no-video .portal-stack {
+    max-width: 860px;
+  }
+
+  body.layout-no-video .waveform-wrap {
+    max-width: 720px;
+    margin-top: 0;
+  }
+
+  body.layout-no-video .transcript {
+    max-width: 860px;
+    margin-top: 12px;
+  }
+
   .transcript::-webkit-scrollbar { width: 4px; }
   .transcript::-webkit-scrollbar-track { background: transparent; }
   .transcript::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 2px; }
@@ -606,13 +645,14 @@
   }
 
   .mobile-layout .controls-meta {
-    flex: 1 1 0;
+    flex: 0 1 auto;
     min-width: 0;
     display: flex;
     align-items: center;
-    justify-content: center;
-    gap: 28px;
-    padding: 0 8px 10px;
+    justify-content: flex-start;
+    gap: 14px;
+    padding: 0 0 10px;
+    flex-wrap: wrap;
   }
 
   .mobile-layout .controls .state-indicator,
@@ -647,14 +687,27 @@
   .mobile-layout .state-indicator {
     display: flex;
     align-items: center;
+    justify-content: center;
     gap: 8px;
     font-size: 12.5px;
     font-weight: 500;
     color: var(--c-text-dim);
     transition: color 0.3s;
-    padding: 0;
-    background: none;
-    border-radius: 0;
+    padding: 6px 10px;
+    background: rgba(255,255,255,0.02);
+    border-radius: 999px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    appearance: none;
+    width: auto;
+    max-width: 100%;
+    min-width: 0;
+    flex: 0 1 auto;
+    white-space: nowrap;
+  }
+
+  .mobile-layout .on-device-pill {
+    white-space: nowrap;
   }
 
   .mobile-layout .state-indicator .dot {
@@ -669,6 +722,13 @@
   .mobile-layout .state-indicator .dot.processing { animation: dot-pulse 0.6s ease-in-out infinite; }
   .mobile-layout .state-indicator .dot.speaking { animation: dot-pulse 1s ease-in-out infinite; }
   .mobile-layout .state-indicator .dot.loading { animation: dot-pulse 2.5s ease-in-out infinite; }
+  .mobile-layout .state-indicator .dot.muted { animation: none; }
+
+  .mobile-layout .state-indicator.paused {
+    color: #fca5a5;
+    background: rgba(248,113,113,0.08);
+    border-color: rgba(248,113,113,0.18);
+  }
 
   /* ── Responsive ── */
   @media (min-width: 1024px) {
@@ -714,10 +774,10 @@
 
     <div class="side-section">
       <h3>Status</h3>
-      <div class="state-indicator">
+      <button id="stateIndicator" class="state-indicator" type="button" aria-pressed="true">
         <div id="stateDot" class="dot loading"></div>
         <span id="stateText">Loading...</span>
-      </div>
+      </button>
     </div>
 
     <div class="side-section">
@@ -792,14 +852,14 @@
     <!-- Controls -->
     <div class="controls">
       <div class="side-selector" style="flex: 1;">
-        <label for="inputSourceSelect">Input</label>
+        <label for="inputSourceSelect">Video</label>
         <select id="inputSourceSelect"></select>
       </div>
       <div class="controls-meta">
-        <div class="state-indicator">
+        <button id="stateIndicator" class="state-indicator" type="button" aria-pressed="true">
           <div id="stateDot" class="dot loading"></div>
           <span id="stateText">Loading...</span>
-        </div>
+        </button>
         <span class="on-device-pill">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="4" width="12" height="9" rx="2"/><path d="M5 4V3a3 3 0 0 1 6 0v1"/></svg>
           Multimodal
@@ -820,7 +880,9 @@ function $$(id) {
   return document.getElementById(id);
 }
 let video, inputSourceSelect, languageSelect, voiceSelect, messagesDiv, statusEl;
-let stateDot, stateText, viewportWrap, waveformCanvas, waveformCtx, mirrorToggleBtn, mirrorToggleBoundEl = null;
+let stateDot, stateText, viewportWrap, viewportGlow, waveformCanvas, waveformCtx, mirrorToggleBtn, stateIndicatorBtn;
+let mirrorToggleBoundEl = null;
+let stateIndicatorBoundEl = null;
 
 function refreshElements() {
   video = $$('video');
@@ -832,11 +894,20 @@ function refreshElements() {
   stateDot = $$('stateDot');
   stateText = $$('stateText');
   viewportWrap = $$('viewportWrap');
+  viewportGlow = viewportWrap ? viewportWrap.querySelector('.viewport-glow') : null;
   waveformCanvas = $$('waveform');
   waveformCtx = waveformCanvas.getContext('2d');
   mirrorToggleBtn = $$('mirrorToggle');
+  stateIndicatorBtn = $$('stateIndicator');
   syncMirrorToggleBinding();
+  syncStateIndicatorBinding();
+  if (video) {
+    video.srcObject = mediaStream || null;
+    video.classList.toggle('mirror', currentMirrorState);
+  }
+  applyVideoLayout();
   updateMirrorToggleUI();
+  updateStateUI();
 }
 
 let ws, mediaStream, myvad, audioStream;
@@ -850,6 +921,10 @@ let selectedLanguage = 'ja';
 let selectedVoice = 'jf_alpha';
 let activeTurnId = null;
 let interruptedTurnId = null;
+let listeningEnabled = true;
+let vadRunning = false;
+let wakeLockSentinel = null;
+let wakeLockRetryTimer = 0;
 
 // Streaming audio playback state
 let streamSampleRate = 24000;
@@ -884,14 +959,26 @@ function scrollMessagesToBottom(immediate = false) {
 const BAR_COUNT = 40;
 const BAR_GAP = 3;
 let waveformRAF;
+let waveformResizeRAF = 0;
 let ambientPhase = 0;
 
 function initWaveformCanvas() {
+  if (!waveformCanvas || !waveformCtx) return;
   const dpr = window.devicePixelRatio || 1;
   const rect = waveformCanvas.getBoundingClientRect();
-  waveformCanvas.width = rect.width * dpr;
-  waveformCanvas.height = rect.height * dpr;
-  waveformCtx.scale(dpr, dpr);
+  if (!rect.width || !rect.height) return;
+  waveformCtx.setTransform(1, 0, 0, 1, 0, 0);
+  waveformCanvas.width = Math.round(rect.width * dpr);
+  waveformCanvas.height = Math.round(rect.height * dpr);
+  waveformCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+function scheduleWaveformCanvasResize() {
+  if (waveformResizeRAF) cancelAnimationFrame(waveformResizeRAF);
+  waveformResizeRAF = requestAnimationFrame(() => {
+    waveformResizeRAF = 0;
+    initWaveformCanvas();
+  });
 }
 
 function getStateColor() {
@@ -991,6 +1078,7 @@ function drawWaveform() {
 
 // ── Dynamic glow intensity for speaking state ──
 function updateSpeakingGlow() {
+  if (!viewportWrap || !viewportGlow) return;
   if (state !== 'speaking' || !analyser) return;
   const data = new Uint8Array(analyser.frequencyBinCount);
   analyser.getByteFrequencyData(data);
@@ -1001,7 +1089,7 @@ function updateSpeakingGlow() {
   viewportWrap.style.setProperty('--speak-intensity', intensity);
   const spread = 20 + avg * 60;
   const inner = 15 + avg * 25;
-  document.querySelector('.viewport-glow').style.boxShadow =
+  viewportGlow.style.boxShadow =
     `0 0 ${spread}px ${spread * 0.4}px rgba(129,140,248,${intensity * 0.25})`;
   viewportWrap.style.boxShadow =
     `inset 0 0 ${inner}px rgba(129,140,248,${intensity * 0.15}), 0 0 ${inner}px rgba(129,140,248,${intensity * 0.2})`;
@@ -1011,35 +1099,61 @@ function updateSpeakingGlow() {
 // ── State Machine ──
 function setState(newState) {
   state = newState;
+  updateStateUI();
+  syncWakeLock();
+}
 
-  stateDot.className = `dot ${newState}`;
-  const labels = { loading: 'Loading...', listening: 'Listening', processing: 'Thinking...', speaking: 'Speaking' };
-  stateText.textContent = labels[newState] || newState;
+function getDisplayedState() {
+  if (!listeningEnabled && state === 'listening') return 'muted';
+  return state;
+}
 
-  viewportWrap.className = `viewport-wrap ${newState}`;
+function updateStateUI() {
+  if (!stateDot || !stateText || !viewportWrap) return;
+  const displayedState = getDisplayedState();
 
-  if (newState !== 'speaking') {
+  stateDot.className = `dot ${displayedState}`;
+  const labels = {
+    loading: 'Loading...',
+    listening: 'Listening',
+    muted: 'Listening Off',
+    processing: 'Thinking...',
+    speaking: 'Speaking'
+  };
+  stateText.textContent = labels[displayedState] || displayedState;
+
+  viewportWrap.className = `viewport-wrap ${state}${displayedState === 'muted' ? ' paused' : ''}`;
+  if (stateIndicatorBtn) {
+    stateIndicatorBtn.classList.toggle('paused', !listeningEnabled);
+    stateIndicatorBtn.setAttribute('aria-pressed', String(listeningEnabled));
+    stateIndicatorBtn.title = listeningEnabled
+      ? 'Click to temporarily turn off voice listening'
+      : 'Click to resume voice listening';
+  }
+
+  if (state !== 'speaking') {
     viewportWrap.style.boxShadow = '';
-    document.querySelector('.viewport-glow').style.boxShadow = '';
+    if (viewportGlow) viewportGlow.style.boxShadow = '';
   }
 
   const stateVars = {
     listening: ['#4ade80', 'rgba(74,222,128,0.12)'],
+    muted: ['#f87171', 'rgba(248,113,113,0.12)'],
     processing: ['#f59e0b', 'rgba(245,158,11,0.12)'],
     speaking: ['#818cf8', 'rgba(129,140,248,0.12)'],
     loading: ['#3a3d46', 'rgba(58,61,70,0.12)'],
   };
-  const [glow, glowDim] = stateVars[newState] || stateVars.loading;
+  const [glow, glowDim] = stateVars[displayedState] || stateVars.loading;
   document.documentElement.style.setProperty('--glow', glow);
   document.documentElement.style.setProperty('--glow-dim', glowDim);
 
-  if (newState === 'speaking') requestAnimationFrame(updateSpeakingGlow);
+  if (state === 'speaking') requestAnimationFrame(updateSpeakingGlow);
 
   if (myvad) {
-    myvad.setOptions({ positiveSpeechThreshold: newState === 'speaking' ? 0.92 : 0.5 });
+    myvad.setOptions({ positiveSpeechThreshold: state === 'speaking' ? 0.92 : 0.5 });
   }
 
-  if (newState === 'listening' && analyser) {
+  if (displayedState === 'listening' && analyser) {
     try { getMicSource().connect(analyser); } catch {}
   } else {
     try { getMicSource().disconnect(analyser); } catch {}
@@ -1138,7 +1252,9 @@ function connect() {
 function setStatus(cls, text) { statusEl.className = `status-pill ${cls}`; statusEl.textContent = text; }
 
 // ── Video Source Switching ──
+const VIDEO_SOURCE_STORAGE_KEY = 'parlor-video-source';
 let videoSource = 'off';
+let preferredVideoSource = loadVideoSourceSelection();
 let currentCameraId = null;
 let screenShareTrack = null;
 let suppressScreenShareEnded = false;
@@ -1158,6 +1274,20 @@ function loadMirrorOverrides() {
   } catch {
     return {};
   }
+}
+
+function loadVideoSourceSelection() {
+  try {
+    return localStorage.getItem(VIDEO_SOURCE_STORAGE_KEY) || 'off';
+  } catch {
+    return 'off';
+  }
+}
+
+function saveVideoSourceSelection(source) {
+  try {
+    localStorage.setItem(VIDEO_SOURCE_STORAGE_KEY, source);
+  } catch {}
 }
 
 function saveMirrorOverrides() {
@@ -1210,6 +1340,16 @@ function syncMirrorToggleBinding() {
   mirrorToggleBoundEl = mirrorToggleBtn;
 }
 
+function syncStateIndicatorBinding() {
+  if (stateIndicatorBoundEl && stateIndicatorBoundEl !== stateIndicatorBtn) {
+    stateIndicatorBoundEl.removeEventListener('click', toggleListening);
+  }
+  if (stateIndicatorBtn && stateIndicatorBoundEl !== stateIndicatorBtn) {
+    stateIndicatorBtn.addEventListener('click', toggleListening);
+  }
+  stateIndicatorBoundEl = stateIndicatorBtn;
+}
+
 function setVideoMirror(shouldMirror) {
   currentMirrorState = !!shouldMirror;
   video.classList.toggle('mirror', currentMirrorState);
@@ -1234,8 +1374,11 @@ function handleScreenShareEnded() {
   suppressScreenShareEnded = true;
   stopStream();
   videoSource = 'off';
+  preferredVideoSource = 'off';
+  saveVideoSourceSelection('off');
   inputSourceSelect.value = 'off';
   setVideoMirror(false);
+  applyVideoLayout();
 }
 
 async function enumerateVideoDevices() {
@@ -1262,8 +1405,12 @@ async function enumerateVideoDevices() {
     screenOpt.value = 'screen';
     screenOpt.textContent = 'Screen Share';
     select.appendChild(screenOpt);
-    if (select.querySelector('option[value="' + videoSource + '"]')) {
-      select.value = videoSource;
+    if (select.querySelector('option[value="' + preferredVideoSource + '"]')) {
+      select.value = preferredVideoSource;
+    } else {
+      preferredVideoSource = 'off';
+      select.value = 'off';
+      saveVideoSourceSelection('off');
     }
   } catch (e) { console.warn('Enumerate devices failed:', e.message); }
 }
@@ -1277,15 +1424,78 @@ async function stopStream() {
   screenShareTrack = null;
   video.srcObject = null;
   suppressScreenShareEnded = false;
+  applyVideoLayout();
 }
 
-async function switchVideoSource(source) {
-  if (source === videoSource) return;
+function applyVideoLayout() {
+  const hasVideo = !!(videoSource && videoSource !== 'off' && mediaStream);
+  document.body.classList.toggle('layout-no-video', !hasVideo);
+  scheduleWaveformCanvasResize();
+  syncWakeLock();
+}
+
+function shouldHoldWakeLock() {
+  return document.visibilityState === 'visible' && videoSource === 'off';
+}
+
+function releaseWakeLock() {
+  if (wakeLockRetryTimer) {
+    clearTimeout(wakeLockRetryTimer);
+    wakeLockRetryTimer = 0;
+  }
+  if (!wakeLockSentinel) return;
+  const sentinel = wakeLockSentinel;
+  wakeLockSentinel = null;
+  try { sentinel.release(); } catch {}
+}
+
+async function requestWakeLock() {
+  if (!shouldHoldWakeLock()) return false;
+  if (!('wakeLock' in navigator) || wakeLockSentinel) return !!wakeLockSentinel;
+  try {
+    wakeLockSentinel = await navigator.wakeLock.request('screen');
+    wakeLockSentinel.addEventListener('release', () => {
+      wakeLockSentinel = null;
+      if (shouldHoldWakeLock()) {
+        scheduleWakeLockRetry();
+      }
+    });
+    return true;
+  } catch {
+    wakeLockSentinel = null;
+    return false;
+  }
+}
+
+function scheduleWakeLockRetry() {
+  if (wakeLockRetryTimer) return;
+  wakeLockRetryTimer = window.setTimeout(() => {
+    wakeLockRetryTimer = 0;
+    requestWakeLock();
+  }, 1000);
+}
+
+function syncWakeLock() {
+  if (!shouldHoldWakeLock()) {
+    releaseWakeLock();
+    return;
+  }
+  requestWakeLock();
+}
+
+async function switchVideoSource(source, options = {}) {
+  const { persist = true, force = false } = options;
+  if (!force && source === videoSource && (source === 'off' || !!mediaStream)) return;
+  if (persist) {
+    preferredVideoSource = source;
+    saveVideoSourceSelection(source);
+  }
   await stopStream();
+  videoSource = 'off';
+  currentCameraId = null;
+  setVideoMirror(false);
   if (source === 'off') {
-    mediaStream = null; videoSource = 'off';
-    currentCameraId = null;
-    setVideoMirror(false);
+    mediaStream = null;
   } else if (source === 'screen') {
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({ video: { cursor: 'always' } });
@@ -1302,6 +1512,13 @@ async function switchVideoSource(source) {
       setVideoMirror(resolveMirrorPreference(stream, source));
     } catch (e) { console.warn('Camera start failed:', e.message); }
   }
+  if (!persist) {
+    preferredVideoSource = videoSource;
+  }
+  if (inputSourceSelect && inputSourceSelect.value !== videoSource) {
+    inputSourceSelect.value = videoSource;
+  }
+  applyVideoLayout();
 }
 
 function captureFrame() {
@@ -1318,6 +1535,7 @@ let speakingStartedAt = 0;
 const BARGE_IN_GRACE_MS = 800;
 
 function handleSpeechStart() {
+  if (!listeningEnabled) return;
   if (state === 'speaking') {
     if (Date.now() - speakingStartedAt < BARGE_IN_GRACE_MS) {
       console.log('Barge-in suppressed (echo grace period)');
@@ -1335,6 +1553,7 @@ function handleSpeechStart() {
 }
 
 function handleSpeechEnd(audio) {
+  if (!listeningEnabled) return;
   if (state !== 'listening') return;
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
@@ -1376,6 +1595,32 @@ function stopPlayback() {
   streamSources = [];
   currentSource = null;
   streamNextTime = 0;
+}
+
+function setListeningEnabled(enabled) {
+  listeningEnabled = enabled;
+  if (myvad) {
+    try {
+      if (enabled && !vadRunning) {
+        if (typeof myvad.start === 'function') {
+          myvad.start();
+          vadRunning = true;
+        }
+      } else if (!enabled && vadRunning) {
+        if (typeof myvad.pause === 'function') {
+          myvad.pause();
+          vadRunning = false;
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to toggle VAD:', e.message);
+    }
+  }
+  updateStateUI();
+}
+
+function toggleListening() {
+  setListeningEnabled(!listeningEnabled);
 }
 
 async function ensureAudioCtx() {
@@ -1480,8 +1725,14 @@ async function init() {
   initWaveformCanvas();
   window.addEventListener('resize', () => {
     refreshElements();
-    initWaveformCanvas();
+    scheduleWaveformCanvasResize();
   });
+  document.addEventListener('visibilitychange', syncWakeLock);
+  window.addEventListener('focus', syncWakeLock);
+  window.addEventListener('pageshow', syncWakeLock);
+  window.addEventListener('pagehide', releaseWakeLock);
+  document.addEventListener('pointerdown', syncWakeLock, { passive: true });
+  document.addEventListener('touchstart', syncWakeLock, { passive: true });
 
   ttsOptions = await fetch('/api/tts/options').then(response => response.json());
   const modelInfo = await fetch('/api/model').then(r => r.json()).catch(() => ({ model: null }));
@@ -1505,6 +1756,11 @@ async function init() {
   });
 
   await enumerateVideoDevices();
+  if (preferredVideoSource !== 'off') {
+    await switchVideoSource(preferredVideoSource, { persist: false, force: true });
+  } else {
+    applyVideoLayout();
+  }
   connect();
 
   myvad = await vad.MicVAD.new({
@@ -1525,10 +1781,12 @@ async function init() {
   });
 
   myvad.start();
+  vadRunning = true;
 
   const initAudio = () => {
     ensureAudioCtx().then(() => {
       if (audioCtx.state === 'suspended') audioCtx.resume();
+      syncWakeLock();
       document.removeEventListener('click', initAudio);
       document.removeEventListener('keydown', initAudio);
     });
@@ -1538,6 +1796,7 @@ async function init() {
   ensureAudioCtx();
 
   setState('listening');
+  setListeningEnabled(true);
   drawWaveform();
 
   console.log('VAD initialized and listening');
