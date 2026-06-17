@@ -56,16 +56,17 @@ def resolve_tts_selection(msg: dict[str, object]) -> tuple[str, str]:
     return language, voice
 
 
-def load_models():
+async def load_models():
     global backend, tts_backend
-    backend = OpenAICompatibleBackend.from_env()
+    loop = asyncio.get_event_loop()
+    backend = await OpenAICompatibleBackend.from_env()
     print(f"OpenAI-compatible backend loaded: {backend._config.base_url} model={backend._config.model}")
-    tts_backend = tts.load()
+    tts_backend = await loop.run_in_executor(None, tts.load)
 
 
 @asynccontextmanager
 async def lifespan(app):
-    await asyncio.get_event_loop().run_in_executor(None, load_models)
+    await load_models()
     try:
         yield
     finally:
@@ -219,6 +220,13 @@ async def tts_options():
         "default_language": VOICE_CATALOG.default_language,
         "default_voice": VOICE_CATALOG.default_voices[VOICE_CATALOG.default_language],
     }
+
+
+@app.get("/api/model")
+async def model_info():
+    if backend is None or backend._config.model is None:
+        return {"model": "auto"}
+    return {"model": backend._config.model}
 
 
 @app.websocket("/ws")

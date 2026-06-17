@@ -128,8 +128,25 @@ class OpenAICompatibleBackend:
             timeout=config.timeout,
         )
 
+    async def resolve_model(self) -> None:
+        """Resolve the model name by fetching the first model from the API.
+
+        Only does anything if model is None (unconfigured).
+        """
+        if self._config.model is not None:
+            return
+        try:
+            response = await self._client.get("models")
+            if response.status_code == 200:
+                data = response.json()
+                models = data.get("data", [])
+                if models:
+                    self._config.model = models[0].get("id")
+        except Exception:
+            pass
+
     @classmethod
-    def from_env(cls) -> "OpenAICompatibleBackend":
+    async def from_env(cls) -> "OpenAICompatibleBackend":
         base_url = os.environ.get("OPENAI_BASE_URL", "http://127.0.0.1:8080/v1")
         api_key = os.environ.get("OPENAI_API_KEY", "").strip() or None
         model = os.environ.get("OPENAI_MODEL", "").strip() or None
@@ -137,7 +154,7 @@ class OpenAICompatibleBackend:
         temperature = _env_float("OPENAI_TEMPERATURE", 0.2)
         max_tokens = _env_int("OPENAI_MAX_TOKENS", 4096)
 
-        return cls(
+        backend = cls(
             OpenAIBackendConfig(
                 base_url=base_url,
                 api_key=api_key,
@@ -147,6 +164,8 @@ class OpenAICompatibleBackend:
                 max_tokens=max_tokens,
             )
         )
+        await backend.resolve_model()
+        return backend
 
     async def aclose(self) -> None:
         await self._client.aclose()
