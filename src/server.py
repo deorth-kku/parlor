@@ -9,7 +9,7 @@ import os
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import uvicorn
@@ -183,11 +183,21 @@ def json_string_field_is_closed(text: str, field_name: str) -> tuple[str | None,
     return "".join(out), False
 
 
-async def speak_sentence(ws: WebSocket, sentence: str, index: int, language: str, voice: str) -> None:
+async def speak_sentence(
+    ws: WebSocket,
+    sentence: str,
+    index: int,
+    language: str,
+    voice: str,
+    turn_id: str,
+    should_send: Callable[[], bool],
+) -> bool:
     pcm = await asyncio.get_event_loop().run_in_executor(
         None,
         lambda s=sentence, lang=language, selected_voice=voice: tts_backend.generate(s, lang, selected_voice),
     )
+    if not should_send():
+        return False
     pcm_int16 = (pcm * 32767).clip(-32768, 32767).astype(np.int16)
     await ws.send_text(
         json.dumps(
@@ -195,9 +205,11 @@ async def speak_sentence(ws: WebSocket, sentence: str, index: int, language: str
                 "type": "audio_chunk",
                 "audio": base64.b64encode(pcm_int16.tobytes()).decode(),
                 "index": index,
+                "turn_id": turn_id,
             }
         )
     )
+    return True
 
 
 @app.get("/")
@@ -243,6 +255,8 @@ async def websocket_endpoint(ws: WebSocket):
     interrupted = asyncio.Event()
     msg_queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
     history: list[dict[str, object]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    turn_counter = 0
+    current_turn_id = ""
 
     async def receiver():
         try:
@@ -266,6 +280,9 @@ async def websocket_endpoint(ws: WebSocket):
                 break
 
             interrupted.clear()
+            turn_counter += 1
+            turn_id = f"turn-{turn_counter}"
+            current_turn_id = turn_id
             tts_language, tts_voice = resolve_tts_selection(msg)
             user_content = build_user_content(msg)
             history.append({"role": "user", "content": user_content})
@@ -280,9 +297,12 @@ async def websocket_endpoint(ws: WebSocket):
             tts_started = False
             sentence_index = 0
 
+            def is_turn_active() -> bool:
+                return current_turn_id == turn_id and not interrupted.is_set()
+
             async def flush_pending_sentences() -> None:
                 nonlocal sentence_index, tts_started
-                while pending_sentences and not interrupted.is_set():
+                while pending_sentences and is_turn_active():
                     if not tts_started:
                         tts_started = True
                         await ws.send_text(
@@ -291,15 +311,26 @@ async def websocket_endpoint(ws: WebSocket):
                                     "type": "audio_start",
                                     "sample_rate": tts_backend.sample_rate,
                                     "sentence_count": 0,
+                                    "turn_id": turn_id,
                                 }
                             )
                         )
                     sentence = pending_sentences.pop(0)
-                    await speak_sentence(ws, sentence, sentence_index, tts_language, tts_voice)
+                    sent = await speak_sentence(
+                        ws,
+                        sentence,
+                        sentence_index,
+                        tts_language,
+                        tts_voice,
+                        turn_id,
+                        is_turn_active,
+                    )
+                    if not sent:
+                        break
                     sentence_index += 1
 
             try:
-                await ws.send_text(json.dumps({"type": "text_start"}))
+                await ws.send_text(json.dumps({"type": "text_start", "turn_id": turn_id}))
                 async for event in stream:
                     if interrupted.is_set():
                         break
@@ -307,7 +338,7 @@ async def websocket_endpoint(ws: WebSocket):
                     if event["type"] == "delta":
                         delta = str(event["delta"])
                         assistant_text += delta
-                        await ws.send_text(json.dumps({"type": "text_delta", "delta": delta}))
+                        await ws.send_text(json.dumps({"type": "text_delta", "delta": delta, "turn_id": turn_id}))
 
                         pending_text, new_sentences = append_sentence_buffer(pending_text, delta)
                         if new_sentences:
@@ -324,6 +355,7 @@ async def websocket_endpoint(ws: WebSocket):
                                         "type": "transcription_delta",
                                         "text": transcription,
                                         "complete": bool(event.get("complete", False)),
+                                        "turn_id": turn_id,
                                     }
                                 )
                             )
@@ -360,6 +392,7 @@ async def websocket_endpoint(ws: WebSocket):
                         "type": "text_end",
                         "text": assistant_text or "Okay.",
                         "llm_time": round(llm_time, 2),
+                        "turn_id": turn_id,
                         **({"transcription": assistant_transcription} if assistant_transcription else {}),
                     }
                 )
@@ -372,17 +405,19 @@ async def websocket_endpoint(ws: WebSocket):
                             "type": "audio_start",
                             "sample_rate": tts_backend.sample_rate,
                             "sentence_count": 0,
+                            "turn_id": turn_id,
                         }
                     )
                 )
                 tts_started = True
 
-            if not interrupted.is_set():
+            if is_turn_active():
                 await ws.send_text(
                     json.dumps(
                         {
                             "type": "audio_end",
                             "tts_time": 0 if sentence_index == 0 else round(time.time() - t0, 2),
+                            "turn_id": turn_id,
                         }
                     )
                 )

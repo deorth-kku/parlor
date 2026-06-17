@@ -848,6 +848,8 @@ let activeAssistantMsg = null;
 let ttsOptions = null;
 let selectedLanguage = 'ja';
 let selectedVoice = 'jf_alpha';
+let activeTurnId = null;
+let interruptedTurnId = null;
 
 // Streaming audio playback state
 let streamSampleRate = 24000;
@@ -1063,12 +1065,14 @@ function connect() {
       }
       activeAssistantMsg = addMessage('assistant', msg.text, `LLM ${msg.llm_time}s`);
     } else if (msg.type === 'text_start') {
-      // A new assistant turn has started, so we can stop ignoring stale audio from the interrupted one.
+      activeTurnId = msg.turn_id || null;
       ignoreIncomingAudio = false;
       activeAssistantMsg = addMessage('assistant', '', '');
     } else if (msg.type === 'transcription_delta') {
+      if (msg.turn_id && activeTurnId && msg.turn_id !== activeTurnId) return;
       updateLatestUserMessage(msg.text);
     } else if (msg.type === 'text_delta') {
+      if (msg.turn_id && activeTurnId && msg.turn_id !== activeTurnId) return;
       if (activeAssistantMsg) {
         const meta = activeAssistantMsg.querySelector('.meta');
         const current = activeAssistantMsg.childNodes[0];
@@ -1082,6 +1086,7 @@ function connect() {
         activeAssistantMsg = addMessage('assistant', msg.delta, '');
       }
     } else if (msg.type === 'text_end') {
+      if (msg.turn_id && activeTurnId && msg.turn_id !== activeTurnId) return;
       if (msg.transcription) {
         updateLatestUserMessage(msg.transcription);
       }
@@ -1100,13 +1105,22 @@ function connect() {
       activeAssistantMsg = null;
       scrollMessagesToBottom(true);
     } else if (msg.type === 'audio_start') {
+      if (msg.turn_id && activeTurnId && msg.turn_id !== activeTurnId) return;
+      if (interruptedTurnId && msg.turn_id === interruptedTurnId) return;
       if (ignoreIncomingAudio) return;
       streamSampleRate = msg.sample_rate || 24000;
       startStreamPlayback();
     } else if (msg.type === 'audio_chunk') {
+      if (msg.turn_id && activeTurnId && msg.turn_id !== activeTurnId) return;
+      if (interruptedTurnId && msg.turn_id === interruptedTurnId) return;
       if (ignoreIncomingAudio) return;
       queueAudioChunk(msg.audio);
     } else if (msg.type === 'audio_end') {
+      if (interruptedTurnId && msg.turn_id === interruptedTurnId) {
+        interruptedTurnId = null;
+        return;
+      }
+      if (msg.turn_id && activeTurnId && msg.turn_id !== activeTurnId) return;
       if (ignoreIncomingAudio) {
         ignoreIncomingAudio = false;
         stopPlayback();
@@ -1116,6 +1130,7 @@ function connect() {
       streamTtsTime = msg.tts_time;
       const meta = messagesDiv.querySelector('.msg.assistant:last-child .meta');
       if (meta) meta.textContent += ` · TTS ${msg.tts_time}s`;
+      interruptedTurnId = null;
     }
   };
 }
@@ -1310,6 +1325,7 @@ function handleSpeechStart() {
     }
     stopPlayback();
     ignoreIncomingAudio = true;
+    interruptedTurnId = activeTurnId;
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'interrupt' }));
     }
