@@ -394,6 +394,49 @@
 
   video.mirror { transform: scaleX(-1); }
 
+  .mirror-toggle {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    z-index: 4;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 999px;
+    background: rgba(9,12,20,0.3);
+    backdrop-filter: blur(14px);
+    color: rgba(244,247,255,0.92);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+    transition: background 0.18s ease, border-color 0.18s ease, transform 0.18s ease, opacity 0.18s ease;
+  }
+
+  .mirror-toggle:hover {
+    background: rgba(18,23,38,0.88);
+    border-color: rgba(255,255,255,0.22);
+    transform: translateY(-1px);
+  }
+
+  .mirror-toggle:active {
+    transform: translateY(0);
+  }
+
+  .mirror-toggle[hidden] {
+    display: none;
+  }
+
+  .mirror-toggle .state {
+    color: rgba(159,231,191,0.9);
+  }
+
+  .mirror-toggle.off .state {
+    color: rgba(255,212,148,0.9);
+  }
+
   /* ── Waveform canvas ── */
   .waveform-wrap {
     width: 100%;
@@ -692,6 +735,10 @@
       <div id="viewportWrap" class="viewport-wrap loading">
         <div class="viewport-glow"></div>
         <video id="video" autoplay muted playsinline></video>
+        <button id="mirrorToggle" class="mirror-toggle" type="button" hidden>
+          <span class="label">Mirror</span>
+          <span class="state">On</span>
+        </button>
       </div>
 
       <!-- Audio waveform visualizer -->
@@ -717,6 +764,10 @@
     <div id="viewportWrap" class="viewport-wrap loading">
       <div class="viewport-glow"></div>
       <video id="video" autoplay muted playsinline></video>
+      <button id="mirrorToggle" class="mirror-toggle" type="button" hidden>
+        <span class="label">Mirror</span>
+        <span class="state">On</span>
+      </button>
     </div>
 
     <!-- Audio waveform visualizer -->
@@ -769,7 +820,7 @@ function $$(id) {
   return document.getElementById(id);
 }
 let video, inputSourceSelect, languageSelect, voiceSelect, messagesDiv, statusEl;
-let stateDot, stateText, viewportWrap, waveformCanvas, waveformCtx;
+let stateDot, stateText, viewportWrap, waveformCanvas, waveformCtx, mirrorToggleBtn, mirrorToggleBoundEl = null;
 
 function refreshElements() {
   video = $$('video');
@@ -783,8 +834,10 @@ function refreshElements() {
   viewportWrap = $$('viewportWrap');
   waveformCanvas = $$('waveform');
   waveformCtx = waveformCanvas.getContext('2d');
+  mirrorToggleBtn = $$('mirrorToggle');
+  syncMirrorToggleBinding();
+  updateMirrorToggleUI();
 }
-refreshElements();
 
 let ws, mediaStream, myvad, audioStream;
 let cameraEnabled = true;
@@ -1074,6 +1127,92 @@ let videoSource = 'off';
 let currentCameraId = null;
 let screenShareTrack = null;
 let suppressScreenShareEnded = false;
+let videoDeviceLabels = new Map();
+const MIRROR_OVERRIDE_STORAGE_KEY = 'parlor-mirror-overrides';
+let mirrorOverrides = loadMirrorOverrides();
+let currentMirrorState = false;
+
+refreshElements();
+
+function loadMirrorOverrides() {
+  try {
+    const raw = localStorage.getItem(MIRROR_OVERRIDE_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveMirrorOverrides() {
+  try {
+    localStorage.setItem(MIRROR_OVERRIDE_STORAGE_KEY, JSON.stringify(mirrorOverrides));
+  } catch {}
+}
+
+function getMirrorOverride(deviceId) {
+  if (!deviceId) return null;
+  return Object.prototype.hasOwnProperty.call(mirrorOverrides, deviceId) ? !!mirrorOverrides[deviceId] : null;
+}
+
+function isLikelyFrontCameraLabel(label) {
+  const normalized = (label || '').trim().toLowerCase();
+  if (!normalized) return false;
+  if (/(back|rear|environment|world|后置|後置)/i.test(normalized)) return false;
+  return /(front|user|facetime|true(depth)?|integrated|built-in|内置|內置|前置)/i.test(normalized);
+}
+
+function shouldMirrorCamera(stream, deviceId) {
+  const track = stream?.getVideoTracks?.()[0];
+  const facingMode = track?.getSettings?.().facingMode;
+  if (facingMode === 'user') return true;
+  if (facingMode === 'environment') return false;
+  return isLikelyFrontCameraLabel(videoDeviceLabels.get(deviceId));
+}
+
+function updateMirrorToggleUI() {
+  if (!mirrorToggleBtn) return;
+  const isCameraSource = !!(videoSource && videoSource !== 'off' && videoSource !== 'screen');
+  mirrorToggleBtn.hidden = !isCameraSource;
+  if (!isCameraSource) return;
+  mirrorToggleBtn.classList.toggle('off', !currentMirrorState);
+  const stateEl = mirrorToggleBtn.querySelector('.state');
+  if (stateEl) stateEl.textContent = currentMirrorState ? 'On' : 'Off';
+  const override = getMirrorOverride(currentCameraId);
+  mirrorToggleBtn.title = override === null
+    ? 'Auto detected. Click to override mirror.'
+    : 'Manual override enabled. Click to toggle mirror.';
+}
+
+function syncMirrorToggleBinding() {
+  if (mirrorToggleBoundEl && mirrorToggleBoundEl !== mirrorToggleBtn) {
+    mirrorToggleBoundEl.removeEventListener('click', toggleMirrorOverride);
+  }
+  if (mirrorToggleBtn && mirrorToggleBoundEl !== mirrorToggleBtn) {
+    mirrorToggleBtn.addEventListener('click', toggleMirrorOverride);
+  }
+  mirrorToggleBoundEl = mirrorToggleBtn;
+}
+
+function setVideoMirror(shouldMirror) {
+  currentMirrorState = !!shouldMirror;
+  video.classList.toggle('mirror', currentMirrorState);
+  updateMirrorToggleUI();
+}
+
+function resolveMirrorPreference(stream, deviceId) {
+  const override = getMirrorOverride(deviceId);
+  if (override !== null) return override;
+  return shouldMirrorCamera(stream, deviceId);
+}
+
+function toggleMirrorOverride() {
+  if (!currentCameraId) return;
+  mirrorOverrides[currentCameraId] = !currentMirrorState;
+  saveMirrorOverrides();
+  setVideoMirror(mirrorOverrides[currentCameraId]);
+}
 
 function handleScreenShareEnded() {
   if (suppressScreenShareEnded) return;
@@ -1081,7 +1220,7 @@ function handleScreenShareEnded() {
   stopStream();
   videoSource = 'off';
   inputSourceSelect.value = 'off';
-  video.classList.remove('mirror');
+  setVideoMirror(false);
 }
 
 async function enumerateVideoDevices() {
@@ -1091,6 +1230,7 @@ async function enumerateVideoDevices() {
     const devices = await navigator.mediaDevices.enumerateDevices();
     probe.getTracks().forEach(t => t.stop());
     const videoInputs = devices.filter(d => d.kind === 'videoinput');
+    videoDeviceLabels = new Map(videoInputs.map(d => [d.deviceId, d.label || '']));
     const select = inputSourceSelect;
     select.innerHTML = '';
     const offOpt = document.createElement('option');
@@ -1129,20 +1269,22 @@ async function switchVideoSource(source) {
   await stopStream();
   if (source === 'off') {
     mediaStream = null; videoSource = 'off';
-    video.classList.remove('mirror');
+    currentCameraId = null;
+    setVideoMirror(false);
   } else if (source === 'screen') {
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({ video: { cursor: 'always' } });
       mediaStream = stream; screenShareTrack = stream.getVideoTracks()[0] || null;
       if (screenShareTrack) screenShareTrack.onended = handleScreenShareEnded;
       video.srcObject = stream; videoSource = 'screen';
-      video.classList.remove('mirror');
+      currentCameraId = null;
+      setVideoMirror(false);
     } catch (e) { console.warn('Screen share failed:', e.message); }
   } else {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: source } } });
       mediaStream = stream; video.srcObject = stream; videoSource = source; currentCameraId = source;
-      video.classList.add('mirror'); // default mirror for all cameras
+      setVideoMirror(resolveMirrorPreference(stream, source));
     } catch (e) { console.warn('Camera start failed:', e.message); }
   }
 }
@@ -1320,7 +1462,10 @@ inputSourceSelect.addEventListener('change', () => {
 // ── Init ──
 async function init() {
   initWaveformCanvas();
-  window.addEventListener('resize', () => { refreshElements(); initWaveformCanvas(); });
+  window.addEventListener('resize', () => {
+    refreshElements();
+    initWaveformCanvas();
+  });
 
   ttsOptions = await fetch('/api/tts/options').then(response => response.json());
   const modelInfo = await fetch('/api/model').then(r => r.json()).catch(() => ({ model: null }));
