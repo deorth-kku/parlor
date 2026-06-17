@@ -933,6 +933,7 @@ let streamSampleRate = 24000;
 let streamNextTime = 0;
 let streamSources = [];
 let streamTtsTime = null;
+let streamPlaybackStarted = false;
 let scrollRaf = 0;
 
 // ── Waveform Visualizer ──
@@ -1246,6 +1247,10 @@ function connect() {
       streamTtsTime = msg.tts_time;
       const meta = messagesDiv.querySelector('.msg.assistant:last-child .meta');
       if (meta) meta.textContent += ` · TTS ${msg.tts_time}s`;
+      if (!streamPlaybackStarted && state !== 'listening') {
+        setState('listening');
+        setStatus('connected', 'Connected');
+      }
       interruptedTurnId = null;
     }
   };
@@ -1597,6 +1602,7 @@ function stopPlayback() {
   streamSources = [];
   currentSource = null;
   streamNextTime = 0;
+  streamPlaybackStarted = false;
 }
 
 function setListeningEnabled(enabled) {
@@ -1643,9 +1649,6 @@ function startStreamPlayback() {
   ensureAudioCtx();
   if (audioCtx.state === 'suspended') audioCtx.resume();
   streamNextTime = audioCtx.currentTime + 0.05;
-  speakingStartedAt = Date.now();
-  setState('speaking');
-  setStatus('speaking', 'Speaking');
 }
 
 function queueAudioChunk(base64Pcm) {
@@ -1667,6 +1670,12 @@ function queueAudioChunk(base64Pcm) {
   source.connect(analyser);
 
   const startAt = Math.max(streamNextTime, audioCtx.currentTime);
+  if (!streamPlaybackStarted) {
+    streamPlaybackStarted = true;
+    speakingStartedAt = Date.now();
+    setState('speaking');
+    setStatus('speaking', 'Speaking');
+  }
   source.start(startAt);
   streamNextTime = startAt + audioBuffer.duration;
 

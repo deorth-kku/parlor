@@ -293,16 +293,26 @@ async def websocket_endpoint(ws: WebSocket):
             assistant_text = ""
             assistant_transcription = ""
             pending_text = ""
-            pending_sentences: list[str] = []
             tts_started = False
             sentence_index = 0
+            sentence_queue: asyncio.Queue[str | None] = asyncio.Queue()
 
             def is_turn_active() -> bool:
                 return current_turn_id == turn_id and not interrupted.is_set()
 
-            async def flush_pending_sentences() -> None:
+            async def enqueue_sentences(sentences: list[str]) -> None:
+                for sentence in sentences:
+                    if sentence:
+                        await sentence_queue.put(sentence)
+
+            async def tts_worker() -> None:
                 nonlocal sentence_index, tts_started
-                while pending_sentences and is_turn_active():
+                while True:
+                    sentence = await sentence_queue.get()
+                    if sentence is None:
+                        break
+                    if not is_turn_active():
+                        continue
                     if not tts_started:
                         tts_started = True
                         await ws.send_text(
@@ -315,7 +325,6 @@ async def websocket_endpoint(ws: WebSocket):
                                 }
                             )
                         )
-                    sentence = pending_sentences.pop(0)
                     sent = await speak_sentence(
                         ws,
                         sentence,
@@ -328,6 +337,8 @@ async def websocket_endpoint(ws: WebSocket):
                     if not sent:
                         break
                     sentence_index += 1
+
+            tts_task = asyncio.create_task(tts_worker())
 
             try:
                 await ws.send_text(json.dumps({"type": "text_start", "turn_id": turn_id}))
@@ -342,8 +353,7 @@ async def websocket_endpoint(ws: WebSocket):
 
                         pending_text, new_sentences = append_sentence_buffer(pending_text, delta)
                         if new_sentences:
-                            pending_sentences.extend(new_sentences)
-                            await flush_pending_sentences()
+                            await enqueue_sentences(new_sentences)
 
                     elif event["type"] == "transcription":
                         transcription = str(event["text"]).replace('<|"|>', "").strip()
@@ -370,13 +380,13 @@ async def websocket_endpoint(ws: WebSocket):
                             assistant_transcription = assistant_transcription.replace('<|"|>', "").strip()
 
                 if pending_text.strip():
-                    pending_sentences.append(pending_text.strip())
+                    await enqueue_sentences([pending_text.strip()])
                     pending_text = ""
-                if pending_sentences and not interrupted.is_set():
-                    await flush_pending_sentences()
 
             finally:
                 llm_time = time.time() - t0
+                await sentence_queue.put(None)
+                await tts_task
 
             if interrupted.is_set():
                 print("Interrupted after LLM, skipping response")
@@ -397,19 +407,6 @@ async def websocket_endpoint(ws: WebSocket):
                     }
                 )
             )
-
-            if not tts_started:
-                await ws.send_text(
-                    json.dumps(
-                        {
-                            "type": "audio_start",
-                            "sample_rate": tts_backend.sample_rate,
-                            "sentence_count": 0,
-                            "turn_id": turn_id,
-                        }
-                    )
-                )
-                tts_started = True
 
             if is_turn_active():
                 await ws.send_text(
