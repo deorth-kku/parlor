@@ -115,6 +115,49 @@ def _extract_json_string_field(text: str, field_name: str) -> tuple[str | None, 
     return "".join(out), False
 
 
+def _finalize_structured_payload(raw_content: str, *, source: str) -> dict[str, Any]:
+    parsed: dict[str, Any] = {}
+    parse_error: Exception | None = None
+
+    try:
+        candidate = _extract_json_payload(raw_content)
+        if isinstance(candidate, dict):
+            parsed = candidate
+    except Exception as exc:
+        parse_error = exc
+
+    transcription_text, transcription_complete = _extract_json_string_field(raw_content, "transcription")
+    response_text, response_complete = _extract_json_string_field(raw_content, "response")
+
+    if not parsed.get("transcription") and transcription_text is not None:
+        parsed["transcription"] = transcription_text
+    if not parsed.get("response") and response_text is not None:
+        parsed["response"] = response_text
+
+    parsed.setdefault("transcription", "")
+    parsed.setdefault("response", "")
+
+    missing_fields: list[str] = []
+    if not parsed["transcription"].strip():
+        missing_fields.append("transcription")
+    if not parsed["response"].strip():
+        missing_fields.append("response")
+
+    if parse_error or missing_fields:
+        print(
+            f"[openai_backend] {source} structured parse issue: "
+            f"parse_error={parse_error!r}, "
+            f"missing_fields={missing_fields}, "
+            f"transcription_complete={transcription_complete}, "
+            f"response_complete={response_complete}"
+        )
+        print(f"[openai_backend] {source} raw model output:\n{raw_content}")
+
+    parsed["_raw_content"] = raw_content
+    parsed["_parse_error"] = repr(parse_error) if parse_error else ""
+    return parsed
+
+
 class OpenAICompatibleBackend:
     def __init__(self, config: OpenAIBackendConfig):
         headers = {}
@@ -227,10 +270,7 @@ class OpenAICompatibleBackend:
         data = response.json()
         choice = data["choices"][0]["message"]
         content = self._join_message_content(choice.get("content"))
-        parsed = _extract_json_payload(content)
-        parsed.setdefault("transcription", "")
-        parsed.setdefault("response", "")
-        parsed["_raw_content"] = content
+        parsed = _finalize_structured_payload(content, source="complete_turn")
         parsed["_usage"] = data.get("usage", {})
         return parsed
 
@@ -293,10 +333,7 @@ class OpenAICompatibleBackend:
                         last_response_text = response_text
                         yield {"type": "delta", "delta": new_text, "complete": response_complete}
 
-            parsed = _extract_json_payload(raw_content)
-            parsed.setdefault("transcription", "")
-            parsed.setdefault("response", "")
-            parsed["_raw_content"] = raw_content
+            parsed = _finalize_structured_payload(raw_content, source="stream_turn")
             parsed["_usage"] = {}
             yield {"type": "done", "parsed": parsed}
 
