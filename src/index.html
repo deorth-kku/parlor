@@ -550,10 +550,32 @@
     max-width: 640px;
     padding: 12px 4px 4px;
     display: flex;
-    align-items: center;
-    justify-content: space-between;
+    align-items: flex-end;
+    gap: 10px;
     flex-shrink: 0;
     z-index: 2;
+  }
+
+  .mobile-layout .controls .side-selector {
+    flex: 1 1 0;
+    min-width: 0;
+    margin-bottom: 0;
+  }
+
+  .mobile-layout .controls-meta {
+    flex: 1 1 0;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 28px;
+    padding: 0 8px 10px;
+  }
+
+  .mobile-layout .controls .state-indicator,
+  .mobile-layout .controls .on-device-pill {
+    flex: 0 0 auto;
+    align-self: center;
   }
 
   .mobile-layout .ctrl-btn {
@@ -722,14 +744,16 @@
         <label for="inputSourceSelect">Input</label>
         <select id="inputSourceSelect"></select>
       </div>
-      <div class="state-indicator">
-        <div id="stateDot" class="dot loading"></div>
-        <span id="stateText">Loading...</span>
+      <div class="controls-meta">
+        <div class="state-indicator">
+          <div id="stateDot" class="dot loading"></div>
+          <span id="stateText">Loading...</span>
+        </div>
+        <span class="on-device-pill">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="4" width="12" height="9" rx="2"/><path d="M5 4V3a3 3 0 0 1 6 0v1"/></svg>
+          Multimodal
+        </span>
       </div>
-      <span class="on-device-pill">
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="4" width="12" height="9" rx="2"/><path d="M5 4V3a3 3 0 0 1 6 0v1"/></svg>
-        Multimodal
-      </span>
     </div>
   </div>
 </div>
