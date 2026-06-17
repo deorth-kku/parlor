@@ -275,6 +275,9 @@ async def websocket_endpoint(ws: WebSocket):
 
             assistant_text = ""
             assistant_transcription = ""
+            assistant_raw_content = ""
+            assistant_mode = ""
+            assistant_error = ""
             pending_text = ""
             pending_sentences: list[str] = []
             tts_started = False
@@ -330,6 +333,9 @@ async def websocket_endpoint(ws: WebSocket):
 
                     elif event["type"] == "done":
                         parsed = event["parsed"]
+                        assistant_raw_content = str(parsed.get("_raw_content", ""))
+                        assistant_mode = str(parsed.get("_structured_output_mode", ""))
+                        assistant_error = str(parsed.get("_error", ""))
                         assistant_transcription = str(parsed.get("transcription", "")).strip()
                         final_response = str(parsed.get("response", "")).strip()
                         if final_response and final_response != assistant_text:
@@ -352,6 +358,10 @@ async def websocket_endpoint(ws: WebSocket):
 
             history.append({"role": "assistant", "content": assistant_text or "Okay."})
 
+            if assistant_mode and assistant_mode != "schema":
+                print(f"LLM RAW [{assistant_mode}]: {assistant_raw_content!r}")
+            if assistant_error:
+                print(f"LLM ERROR: {assistant_error}")
             print(f"LLM ({llm_time:.2f}s) [stream]: {assistant_transcription!r} -> {assistant_text}")
 
             await ws.send_text(

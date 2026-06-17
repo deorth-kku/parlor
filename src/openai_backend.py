@@ -4,10 +4,25 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
+
+STRUCTURED_OUTPUT_PROMPT = (
+    "Return exactly one JSON object with two string fields: "
+    '"transcription" and "response". '
+    "Use an empty string for transcription when there is no spoken audio to transcribe. "
+    "Do not include markdown fences, commentary, role tags, or any extra keys."
+)
+
+PLAIN_RESPONSE_PROMPT = (
+    "Answer the user's latest request directly in 1-4 short sentences. "
+    "Do not emit JSON, markdown fences, thinking tags, or role labels."
+)
+
+ROLE_LABEL_PATTERN = r"(?:assistant|user|system|tool)"
 
 
 @dataclass(slots=True)
@@ -18,6 +33,7 @@ class OpenAIBackendConfig:
     timeout: float
     temperature: float
     max_tokens: int | None
+    structured_output_mode: str
 
 
 def _env_float(name: str, default: float) -> float:
@@ -30,8 +46,42 @@ def _env_int(name: str, default: int | None) -> int | None:
     return int(raw) if raw else default
 
 
+def _env_structured_output_mode(name: str, default: str) -> str:
+    raw = os.environ.get(name, "").strip().lower()
+    if raw in {"auto", "schema", "prompt"}:
+        return raw
+    return default
+
+
+def _cleanup_stream_text(text: str) -> str:
+    cleaned = text.replace("<|im_end|>", "").replace('<|"|>', "").replace("<|eot_id|>", "")
+    cleaned = re.sub(rf"<\|im_start\|>{ROLE_LABEL_PATTERN}\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(
+        rf"<\|start_header_id\|>{ROLE_LABEL_PATTERN}<\|end_header_id\|>\s*",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(r"<think>\s*</think>\s*", "", cleaned, flags=re.DOTALL)
+    cleaned = re.sub(r"<think>.*?</think>\s*", "", cleaned, flags=re.DOTALL)
+    if cleaned.startswith("```json"):
+        cleaned = cleaned[len("```json") :].lstrip()
+    elif cleaned.startswith("```"):
+        cleaned = cleaned[3:].lstrip()
+    if cleaned.endswith("```"):
+        cleaned = cleaned[:-3]
+    return cleaned
+
+
+def _cleanup_model_output(text: str) -> str:
+    cleaned = _cleanup_stream_text(text)
+    cleaned = re.sub(rf"^\s*{ROLE_LABEL_PATTERN}\s*$", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(rf"(^|\n)\s*{ROLE_LABEL_PATTERN}\s*(?=\n|$)", r"\1", cleaned, flags=re.IGNORECASE)
+    return cleaned.strip()
+
+
 def _extract_json_payload(text: str) -> dict[str, Any]:
-    raw = text.strip()
+    raw = _cleanup_model_output(text)
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
@@ -115,6 +165,65 @@ def _extract_json_string_field(text: str, field_name: str) -> tuple[str | None, 
     return "".join(out), False
 
 
+def _parse_turn_output(text: str) -> dict[str, Any]:
+    cleaned = _cleanup_model_output(text)
+    try:
+        parsed = _extract_json_payload(cleaned)
+    except json.JSONDecodeError:
+        return {
+            "transcription": "",
+            "response": cleaned,
+        }
+
+    transcription = parsed.get("transcription", "")
+    response = parsed.get("response", "")
+    return {
+        "transcription": transcription if isinstance(transcription, str) else str(transcription),
+        "response": response if isinstance(response, str) else str(response),
+    }
+
+
+def _append_instruction_to_user_content(
+    user_content: str | list[dict[str, Any]],
+    instruction: str,
+) -> str | list[dict[str, Any]]:
+    if isinstance(user_content, str):
+        return f"{user_content.rstrip()}\n\n{instruction}"
+    if isinstance(user_content, list):
+        updated = list(user_content)
+        updated.append({"type": "text", "text": instruction})
+        return updated
+    return user_content
+
+
+def _model_prefers_prompt_structured_output(model_name: str | None) -> bool:
+    if not model_name:
+        return False
+    lowered = model_name.lower()
+    return "qwen" in lowered or "omni" in lowered
+
+
+def _should_switch_to_raw_text(cleaned_text: str) -> bool:
+    compact = cleaned_text.lstrip()
+    if len(compact) < 24:
+        return False
+    if compact.startswith("{") or compact.startswith("```"):
+        return False
+    if '"transcription"' in compact or '"response"' in compact:
+        return False
+    return True
+
+
+def _is_degenerate_model_output(text: str) -> bool:
+    cleaned = _cleanup_model_output(text)
+    if not cleaned:
+        return True
+    lines = [line.strip() for line in cleaned.splitlines() if line.strip()]
+    if not lines:
+        return True
+    return all(re.fullmatch(ROLE_LABEL_PATTERN, line, flags=re.IGNORECASE) for line in lines)
+
+
 class OpenAICompatibleBackend:
     def __init__(self, config: OpenAIBackendConfig):
         headers = {}
@@ -122,6 +231,7 @@ class OpenAICompatibleBackend:
             headers["Authorization"] = f"Bearer {config.api_key}"
 
         self._config = config
+        self._resolved_model: str | None = config.model
         self._client = httpx.AsyncClient(
             base_url=config.base_url.rstrip("/"),
             headers=headers,
@@ -136,7 +246,10 @@ class OpenAICompatibleBackend:
                 data = response.json()
                 models = data.get("data", [])
                 if models:
-                    return models[0].get("id")
+                    model_id = models[0].get("id")
+                    if isinstance(model_id, str) and model_id:
+                        self._resolved_model = model_id
+                    return model_id
         except Exception:
             pass
         return None
@@ -149,6 +262,7 @@ class OpenAICompatibleBackend:
         timeout = _env_float("OPENAI_TIMEOUT", 120.0)
         temperature = _env_float("OPENAI_TEMPERATURE", 0.2)
         max_tokens = _env_int("OPENAI_MAX_TOKENS", 4096)
+        structured_output_mode = _env_structured_output_mode("OPENAI_STRUCTURED_OUTPUT_MODE", "auto")
 
         return cls(
             OpenAIBackendConfig(
@@ -158,6 +272,7 @@ class OpenAICompatibleBackend:
                 timeout=timeout,
                 temperature=temperature,
                 max_tokens=max_tokens,
+                structured_output_mode=structured_output_mode,
             )
         )
 
@@ -195,44 +310,148 @@ class OpenAICompatibleBackend:
             return "\n".join(part for part in parts if part.strip())
         return str(content)
 
-    async def complete_turn(
+    def _model_name_hint(self) -> str | None:
+        return self._config.model or self._resolved_model
+
+    def _preferred_structured_output_mode(self) -> str:
+        mode = self._config.structured_output_mode
+        if mode != "auto":
+            return mode
+        if _model_prefers_prompt_structured_output(self._model_name_hint()):
+            return "prompt"
+        return "schema"
+
+    def _request_modes(self) -> list[str]:
+        preferred = self._preferred_structured_output_mode()
+        if self._config.structured_output_mode == "auto" and preferred == "schema":
+            return ["schema", "prompt"]
+        return [preferred]
+
+    @staticmethod
+    def _should_retry_with_prompt(mode: str, status_code: int, body_text: str) -> bool:
+        if mode != "schema":
+            return False
+        text = body_text.lower()
+        indicators = (
+            "response_format",
+            "json_schema",
+            "grammar",
+            "sampler",
+            "structured output",
+            "<think>",
+            "thinking",
+        )
+        return status_code >= 500 or any(indicator in text for indicator in indicators)
+
+    def _build_messages(
+        self,
+        history: list[dict[str, Any]],
+        user_content: str | list[dict[str, Any]],
+        *,
+        structured_mode: str,
+        prompt_variant: str,
+    ) -> list[dict[str, Any]]:
+        messages = [*history]
+        if structured_mode == "prompt":
+            instruction = STRUCTURED_OUTPUT_PROMPT if prompt_variant == "json" else PLAIN_RESPONSE_PROMPT
+            user_content = _append_instruction_to_user_content(user_content, instruction)
+        messages.append({"role": "user", "content": user_content})
+        return messages
+
+    def _build_payload(
         self,
         history: list[dict[str, Any]],
         *,
         user_content: str | list[dict[str, Any]],
+        stream: bool,
+        structured_mode: str,
+        prompt_variant: str,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
-            "messages": [*history, {"role": "user", "content": user_content}],
+            "messages": self._build_messages(
+                history,
+                user_content,
+                structured_mode=structured_mode,
+                prompt_variant=prompt_variant,
+            ),
             "temperature": self._config.temperature,
             "reasoning_format": "none",
             "chat_template_kwargs": {
                 "enable_thinking": False,
             },
         }
+        if stream:
+            payload["stream"] = True
         if self._config.model:
             payload["model"] = self._config.model
         if self._config.max_tokens is not None:
             payload["max_tokens"] = self._config.max_tokens
-        payload["response_format"] = self._schema()
+        if structured_mode == "schema":
+            payload["response_format"] = self._schema()
+        else:
+            payload["stop"] = [
+                "<|im_start|>",
+                "<|start_header_id|>",
+                "\nuser\n",
+                "\nassistant\n",
+                "\nsystem\n",
+                "\ntool\n",
+            ]
+        return payload
 
-        response = await self._client.post("chat/completions", json=payload)
-        if response.status_code >= 400:
-            body = response.text.lower()
-            if "response_format" in body or "json_schema" in body:
-                fallback = dict(payload)
-                fallback.pop("response_format", None)
-                response = await self._client.post("chat/completions", json=fallback)
-            response.raise_for_status()
+    def _request_attempts(self) -> list[tuple[str, str]]:
+        attempts: list[tuple[str, str]] = []
+        for mode in self._request_modes():
+            if mode == "schema":
+                attempts.append(("schema", "json"))
+            else:
+                attempts.append(("prompt", "json"))
+        if not any(mode == "prompt" and variant == "plain" for mode, variant in attempts):
+            attempts.append(("prompt", "plain"))
+        return attempts
 
-        data = response.json()
-        choice = data["choices"][0]["message"]
-        content = self._join_message_content(choice.get("content"))
-        parsed = _extract_json_payload(content)
-        parsed.setdefault("transcription", "")
-        parsed.setdefault("response", "")
-        parsed["_raw_content"] = content
-        parsed["_usage"] = data.get("usage", {})
-        return parsed
+    async def complete_turn(
+        self,
+        history: list[dict[str, Any]],
+        *,
+        user_content: str | list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        last_response: httpx.Response | None = None
+        last_mode = self._preferred_structured_output_mode()
+        last_variant = "json"
+
+        for structured_mode, prompt_variant in self._request_attempts():
+            last_mode = structured_mode
+            last_variant = prompt_variant
+            payload = self._build_payload(
+                history,
+                user_content=user_content,
+                stream=False,
+                structured_mode=structured_mode,
+                prompt_variant=prompt_variant,
+            )
+            response = await self._client.post("chat/completions", json=payload)
+            last_response = response
+            if response.status_code >= 400:
+                if self._should_retry_with_prompt(structured_mode, response.status_code, response.text):
+                    continue
+                response.raise_for_status()
+
+            data = response.json()
+            choice = data["choices"][0]["message"]
+            content = self._join_message_content(choice.get("content"))
+            if structured_mode == "prompt" and _is_degenerate_model_output(content):
+                continue
+            parsed = _parse_turn_output(content)
+            parsed["_raw_content"] = content
+            parsed["_usage"] = data.get("usage", {})
+            parsed["_structured_output_mode"] = f"{structured_mode}:{prompt_variant}"
+            return parsed
+
+        if last_response is None:
+            raise RuntimeError(f"Failed to submit completion request in mode={last_mode}:{last_variant}")
+        last_response.raise_for_status()
+        raise RuntimeError("Completion request failed unexpectedly")
 
     async def stream_turn(
         self,
@@ -240,25 +459,12 @@ class OpenAICompatibleBackend:
         *,
         user_content: str | list[dict[str, Any]],
     ):
-        payload: dict[str, Any] = {
-            "messages": [*history, {"role": "user", "content": user_content}],
-            "temperature": self._config.temperature,
-            "reasoning_format": "none",
-            "chat_template_kwargs": {
-                "enable_thinking": False,
-            },
-            "stream": True,
-        }
-        if self._config.model:
-            payload["model"] = self._config.model
-        if self._config.max_tokens is not None:
-            payload["max_tokens"] = self._config.max_tokens
-        payload["response_format"] = self._schema()
-
-        async def emit_structured_stream(lines):
+        async def emit_structured_stream(lines, structured_mode: str, prompt_variant: str):
             raw_content = ""
             last_response_text = ""
             last_transcription_text = ""
+            last_clean_text = ""
+            raw_text_mode = False
 
             async for line in lines:
                 if not line.startswith("data: "):
@@ -273,8 +479,11 @@ class OpenAICompatibleBackend:
                     continue
 
                 raw_content += delta
+                cleaned = _cleanup_stream_text(raw_content)
 
-                transcription_text, transcription_complete = _extract_json_string_field(raw_content, "transcription")
+                transcription_text, transcription_complete = _extract_json_string_field(cleaned, "transcription")
+                response_text, response_complete = _extract_json_string_field(cleaned, "response")
+
                 if transcription_text is not None and transcription_text != last_transcription_text:
                     last_transcription_text = transcription_text
                     yield {
@@ -283,7 +492,6 @@ class OpenAICompatibleBackend:
                         "complete": transcription_complete,
                     }
 
-                response_text, response_complete = _extract_json_string_field(raw_content, "response")
                 if response_text is not None:
                     if response_text.startswith(last_response_text):
                         new_text = response_text[len(last_response_text):]
@@ -292,27 +500,81 @@ class OpenAICompatibleBackend:
                     if new_text:
                         last_response_text = response_text
                         yield {"type": "delta", "delta": new_text, "complete": response_complete}
+                    continue
 
-            parsed = _extract_json_payload(raw_content)
-            parsed.setdefault("transcription", "")
-            parsed.setdefault("response", "")
+                if structured_mode == "prompt" and not raw_text_mode and _should_switch_to_raw_text(cleaned):
+                    raw_text_mode = True
+
+                if raw_text_mode:
+                    if cleaned.startswith(last_clean_text):
+                        new_text = cleaned[len(last_clean_text) :]
+                    else:
+                        new_text = cleaned
+                    if new_text:
+                        last_clean_text = cleaned
+                        yield {"type": "delta", "delta": new_text, "complete": False}
+
+            parsed = _parse_turn_output(raw_content)
             parsed["_raw_content"] = raw_content
             parsed["_usage"] = {}
+            parsed["_structured_output_mode"] = f"{structured_mode}:{prompt_variant}"
             yield {"type": "done", "parsed": parsed}
 
-        async with self._client.stream("POST", "chat/completions", json=payload) as response:
-            if response.status_code >= 400:
-                body = await response.aread()
-                text = body.decode("utf-8", errors="ignore").lower()
-                if "response_format" in text or "json_schema" in text:
-                    fallback = dict(payload)
-                    fallback.pop("response_format", None)
-                    async with self._client.stream("POST", "chat/completions", json=fallback) as fallback_response:
-                        fallback_response.raise_for_status()
-                        async for event in emit_structured_stream(fallback_response.aiter_lines()):
-                            yield event
-                        return
-                response.raise_for_status()
+        last_error_text = ""
+        last_fallback_event: dict[str, Any] | None = None
+        for structured_mode, prompt_variant in self._request_attempts():
+            payload = self._build_payload(
+                history,
+                user_content=user_content,
+                stream=True,
+                structured_mode=structured_mode,
+                prompt_variant=prompt_variant,
+            )
+            saw_meaningful_text = False
+            last_done_event: dict[str, Any] | None = None
+            async with self._client.stream("POST", "chat/completions", json=payload) as response:
+                if response.status_code >= 400:
+                    body = await response.aread()
+                    last_error_text = body.decode("utf-8", errors="ignore")
+                    if self._should_retry_with_prompt(structured_mode, response.status_code, last_error_text):
+                        continue
+                    response.raise_for_status()
 
-            async for event in emit_structured_stream(response.aiter_lines()):
-                yield event
+                async for event in emit_structured_stream(response.aiter_lines(), structured_mode, prompt_variant):
+                    if event["type"] == "delta" and str(event.get("delta", "")).strip():
+                        saw_meaningful_text = True
+                        yield event
+                        continue
+                    if event["type"] == "transcription" and str(event.get("text", "")).strip():
+                        yield event
+                        continue
+                    if event["type"] == "done":
+                        last_done_event = event
+                        continue
+                if last_done_event is None:
+                    return
+                parsed = last_done_event["parsed"]
+                last_fallback_event = last_done_event
+                if structured_mode == "prompt" and not saw_meaningful_text and _is_degenerate_model_output(
+                    str(parsed.get("_raw_content", ""))
+                ):
+                    continue
+                yield last_done_event
+                return
+
+        if last_fallback_event is not None:
+            yield last_fallback_event
+            return
+
+        fallback_note = last_error_text.strip() or "all structured-output attempts returned degenerate content"
+        yield {
+            "type": "done",
+            "parsed": {
+                "transcription": "",
+                "response": "",
+                "_raw_content": "",
+                "_usage": {},
+                "_structured_output_mode": "failed",
+                "_error": fallback_note,
+            },
+        }

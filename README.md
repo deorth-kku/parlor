@@ -25,7 +25,7 @@ Browser (playback + transcript)
 ## Requirements
 
 - Python 3.12+
-- An OpenAI-compatible multimodal backend that supports `audio`, `image_url`, and structured output
+- An OpenAI-compatible multimodal backend that supports `audio` and `image_url`
 - macOS with Apple Silicon, or Linux with a supported GPU for TTS
 
 ## Quick start
@@ -51,7 +51,10 @@ Open `http://localhost:8000`, grant camera and microphone access, and start talk
 | `OPENAI_TIMEOUT` | `120` | Request timeout in seconds |
 | `OPENAI_TEMPERATURE` | `0.2` | Sampling temperature |
 | `OPENAI_MAX_TOKENS` | `256` | Max output tokens |
+| `OPENAI_STRUCTURED_OUTPUT_MODE` | `auto` | `auto`, `schema`, or `prompt` for structured response compatibility |
 | `PORT` | `8000` | Server port |
+
+If your backend is based on `llama.cpp` or a Qwen model that injects thinking tokens such as `<think>`, leave `OPENAI_STRUCTURED_OUTPUT_MODE=auto` or set it to `prompt`. That avoids server-side grammar sampling and asks the model to emit the JSON object as plain text instead.
 
 ## Project structure
 
