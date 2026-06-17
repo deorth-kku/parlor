@@ -42,28 +42,17 @@ def _extract_json_payload(text: str) -> dict[str, Any]:
         raise
 
 
-def _extract_json_string_field(text: str, field_name: str) -> tuple[str | None, bool]:
-    """Return the current value of a JSON string field if present.
-
-    The second return value indicates whether the closing quote has been seen.
-    """
-
-    marker = f'"{field_name}"'
-    start = text.find(marker)
-    if start == -1:
-        return None, False
-
-    colon = text.find(":", start + len(marker))
-    if colon == -1:
-        return None, False
-
-    i = colon + 1
+def _skip_json_whitespace(text: str, start: int) -> int:
+    i = start
     while i < len(text) and text[i].isspace():
         i += 1
-    if i >= len(text) or text[i] != '"':
-        return None, False
+    return i
 
-    i += 1
+
+def _parse_json_string(text: str, start: int) -> tuple[str, bool, int]:
+    """Parse a JSON string starting just after the opening quote."""
+
+    i = start
     out: list[str] = []
     escape = False
     unicode_digits = ""
@@ -79,7 +68,7 @@ def _extract_json_string_field(text: str, field_name: str) -> tuple[str | None, 
                     escape = False
                 i += 1
                 continue
-            return "".join(out), False
+            return "".join(out), False, i
 
         if escape:
             mapping = {
@@ -97,7 +86,7 @@ def _extract_json_string_field(text: str, field_name: str) -> tuple[str | None, 
                 i += 1
                 continue
             if ch not in mapping:
-                return "".join(out), False
+                return "".join(out), False, i
             out.append(mapping[ch])
             escape = False
             i += 1
@@ -108,11 +97,144 @@ def _extract_json_string_field(text: str, field_name: str) -> tuple[str | None, 
             i += 1
             continue
         if ch == '"':
-            return "".join(out), True
+            return "".join(out), True, i + 1
         out.append(ch)
         i += 1
 
-    return "".join(out), False
+    return "".join(out), False, i
+
+
+def _extract_json_string_field(text: str, field_name: str) -> tuple[str | None, bool]:
+    """Return the current value of a JSON string field if present.
+
+    The second return value indicates whether the closing quote has been seen.
+    """
+
+    marker = f'"{field_name}"'
+    start = text.find(marker)
+    if start == -1:
+        return None, False
+
+    colon = text.find(":", start + len(marker))
+    if colon == -1:
+        return None, False
+
+    i = _skip_json_whitespace(text, colon + 1)
+    if i >= len(text) or text[i] != '"':
+        return None, False
+
+    value, closed, _ = _parse_json_string(text, i + 1)
+    return value, closed
+
+
+def _extract_json_string_array_field(text: str, field_name: str) -> tuple[list[str] | None, int, bool]:
+    marker = f'"{field_name}"'
+    start = text.find(marker)
+    if start == -1:
+        return None, 0, False
+
+    colon = text.find(":", start + len(marker))
+    if colon == -1:
+        return None, 0, False
+
+    i = _skip_json_whitespace(text, colon + 1)
+    if i >= len(text) or text[i] != "[":
+        return None, 0, False
+
+    i += 1
+    items: list[str] = []
+    finalized_count = 0
+    expect_value = True
+
+    while True:
+        i = _skip_json_whitespace(text, i)
+        if i >= len(text):
+            return items, finalized_count, False
+
+        ch = text[i]
+        if expect_value:
+            if ch == "]":
+                return items, finalized_count, True
+            if ch != '"':
+                return items, finalized_count, False
+
+            value, closed, next_index = _parse_json_string(text, i + 1)
+            items.append(value)
+            if not closed:
+                return items, finalized_count, False
+
+            finalized_count += 1
+            i = next_index
+            expect_value = False
+            continue
+
+        if ch == ",":
+            i += 1
+            expect_value = True
+            continue
+        if ch == "]":
+            return items, finalized_count, True
+        return items, finalized_count, False
+
+
+def normalize_response_items(value: Any) -> list[str]:
+    if isinstance(value, list):
+        items: list[str] = []
+        for item in value:
+            text = str(item).strip()
+            if text:
+                items.append(text)
+        return items
+
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+
+    return []
+
+
+def _is_cjk_like(ch: str) -> bool:
+    if not ch:
+        return False
+
+    code = ord(ch)
+    return (
+        0x4E00 <= code <= 0x9FFF
+        or 0x3040 <= code <= 0x30FF
+        or 0xAC00 <= code <= 0xD7AF
+        or ch in "，。！？；：、（）【】《》「」『』“”‘’"
+    )
+
+
+def render_response_items(items: list[str], *, strip_items: bool) -> str:
+    rendered: list[str] = []
+    previous = ""
+
+    for item in items:
+        text = item.strip() if strip_items else item
+        if not text:
+            continue
+
+        if rendered:
+            needs_space = (
+                not previous[-1].isspace()
+                and not text[0].isspace()
+                and not _is_cjk_like(previous[-1])
+                and not _is_cjk_like(text[0])
+                and text[0] not in ".,!?;:)]}\"'"
+                and previous[-1] not in "([{\"'"
+            )
+            if needs_space:
+                rendered.append(" ")
+
+        rendered.append(text)
+        previous = text
+
+    return "".join(rendered)
+
+
+def response_text_from_value(value: Any) -> str:
+    return render_response_items(normalize_response_items(value), strip_items=True)
 
 
 def _finalize_structured_payload(raw_content: str, *, source: str) -> dict[str, Any]:
@@ -127,20 +249,24 @@ def _finalize_structured_payload(raw_content: str, *, source: str) -> dict[str, 
         parse_error = exc
 
     transcription_text, transcription_complete = _extract_json_string_field(raw_content, "transcription")
-    response_text, response_complete = _extract_json_string_field(raw_content, "response")
+    response_items, response_finalized_count, response_complete = _extract_json_string_array_field(
+        raw_content, "response"
+    )
 
     if not parsed.get("transcription") and transcription_text is not None:
         parsed["transcription"] = transcription_text
-    if not parsed.get("response") and response_text is not None:
-        parsed["response"] = response_text
+    if not parsed.get("response") and response_items is not None:
+        parsed["response"] = response_items
 
     parsed.setdefault("transcription", "")
-    parsed.setdefault("response", "")
+    parsed.setdefault("response", [])
+    parsed["response"] = normalize_response_items(parsed["response"])
+    response_text = render_response_items(parsed["response"], strip_items=True)
 
     missing_fields: list[str] = []
     if not parsed["transcription"].strip():
         missing_fields.append("transcription")
-    if not parsed["response"].strip():
+    if not response_text.strip():
         missing_fields.append("response")
 
     if parse_error or missing_fields:
@@ -149,10 +275,12 @@ def _finalize_structured_payload(raw_content: str, *, source: str) -> dict[str, 
             f"parse_error={parse_error!r}, "
             f"missing_fields={missing_fields}, "
             f"transcription_complete={transcription_complete}, "
-            f"response_complete={response_complete}"
+            f"response_complete={response_complete}, "
+            f"response_finalized_count={response_finalized_count}"
         )
         print(f"[openai_backend] {source} raw model output:\n{raw_content}")
 
+    parsed["_response_text"] = response_text
     parsed["_raw_content"] = raw_content
     parsed["_parse_error"] = repr(parse_error) if parse_error else ""
     return parsed
@@ -217,7 +345,10 @@ class OpenAICompatibleBackend:
                     "type": "object",
                     "properties": {
                         "transcription": {"type": "string"},
-                        "response": {"type": "string"},
+                        "response": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
                     },
                     "required": ["transcription", "response"],
                     "additionalProperties": False,
@@ -299,6 +430,7 @@ class OpenAICompatibleBackend:
             raw_content = ""
             last_response_text = ""
             last_transcription_text = ""
+            last_finalized_response_count = 0
 
             async for line in lines:
                 if not line.startswith("data: "):
@@ -323,15 +455,67 @@ class OpenAICompatibleBackend:
                         "complete": transcription_complete,
                     }
 
-                response_text, response_complete = _extract_json_string_field(raw_content, "response")
-                if response_text is not None:
-                    if response_text.startswith(last_response_text):
-                        new_text = response_text[len(last_response_text):]
-                    else:
-                        new_text = response_text
-                    if new_text:
+                response_items, finalized_count, response_complete = _extract_json_string_array_field(raw_content, "response")
+                if response_items is not None:
+                    response_text = render_response_items(response_items, strip_items=False)
+                    if response_text != last_response_text:
+                        if response_text.startswith(last_response_text):
+                            new_text = response_text[len(last_response_text) :]
+                            if new_text:
+                                yield {
+                                    "type": "delta",
+                                    "delta": new_text,
+                                    "text": response_text,
+                                    "items": response_items,
+                                    "complete": response_complete,
+                                }
+                        else:
+                            yield {
+                                "type": "replace",
+                                "text": response_text,
+                                "items": response_items,
+                                "complete": response_complete,
+                            }
                         last_response_text = response_text
-                        yield {"type": "delta", "delta": new_text, "complete": response_complete}
+
+                    while last_finalized_response_count < finalized_count:
+                        item_text = response_items[last_finalized_response_count].strip()
+                        if item_text:
+                            yield {
+                                "type": "response_item",
+                                "text": item_text,
+                                "index": last_finalized_response_count,
+                            }
+                        last_finalized_response_count += 1
+                else:
+                    response_text, response_complete = _extract_json_string_field(raw_content, "response")
+                    if response_text is not None:
+                        if response_text.startswith(last_response_text):
+                            new_text = response_text[len(last_response_text) :]
+                            if new_text:
+                                yield {
+                                    "type": "delta",
+                                    "delta": new_text,
+                                    "text": response_text,
+                                    "items": [response_text],
+                                    "complete": response_complete,
+                                }
+                        else:
+                            yield {
+                                "type": "replace",
+                                "text": response_text,
+                                "items": [response_text],
+                                "complete": response_complete,
+                            }
+                        last_response_text = response_text
+
+                        if response_complete and last_finalized_response_count == 0 and response_text.strip():
+                            yield {
+                                "type": "response_item",
+                                "text": response_text.strip(),
+                                "index": 0,
+                            }
+                            last_finalized_response_count = 1
 
             parsed = _finalize_structured_payload(raw_content, source="stream_turn")
             parsed["_usage"] = {}

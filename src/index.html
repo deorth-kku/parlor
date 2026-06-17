@@ -1202,6 +1202,20 @@ function connect() {
       } else {
         activeAssistantMsg = addMessage('assistant', msg.delta, '');
       }
+    } else if (msg.type === 'text_replace') {
+      if (msg.turn_id && activeTurnId && msg.turn_id !== activeTurnId) return;
+      if (activeAssistantMsg) {
+        const meta = activeAssistantMsg.querySelector('.meta');
+        const textNode = activeAssistantMsg.childNodes[0];
+        if (textNode && textNode.nodeType === Node.TEXT_NODE) {
+          textNode.textContent = msg.text;
+        } else {
+          activeAssistantMsg.insertBefore(document.createTextNode(msg.text), meta || null);
+        }
+        scrollMessagesToBottom();
+      } else {
+        activeAssistantMsg = addMessage('assistant', msg.text, '');
+      }
     } else if (msg.type === 'text_end') {
       if (msg.turn_id && activeTurnId && msg.turn_id !== activeTurnId) return;
       if (msg.transcription) {

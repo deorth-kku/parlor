@@ -18,8 +18,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 
 import tts
-from openai_backend import OpenAICompatibleBackend
-from sentence_splitter import append_sentence_buffer
+from openai_backend import OpenAICompatibleBackend, response_text_from_value
 from voices_catalog import VOICE_CATALOG
 from tts_prompt import build_language_instruction
 
@@ -29,7 +28,9 @@ SYSTEM_PROMPT = (
     "You are a helpful real-time multimodal AI assistant. "
     "You can understand speech, images, and text. "
     "Return concise answers and keep responses to 1-4 short sentences. "
-    "Always transcribe the user's speech faithfully before responding."
+    "Always transcribe the user's speech faithfully before responding. "
+    "When producing structured JSON, set 'response' to an array of short spoken chunks, "
+    "with one sentence or speakable clause per item."
 )
 
 backend: OpenAICompatibleBackend | None = None
@@ -120,67 +121,6 @@ def build_user_content(msg: dict[str, object]) -> list[dict[str, object]]:
 
     parts.append({"type": "text", "text": build_language_instruction(tts_language, tts_voice)})
     return parts
-
-
-def json_string_field_is_closed(text: str, field_name: str) -> tuple[str | None, bool]:
-    marker = f'"{field_name}"'
-    start = text.find(marker)
-    if start == -1:
-        return None, False
-    colon = text.find(":", start + len(marker))
-    if colon == -1:
-        return None, False
-    i = colon + 1
-    while i < len(text) and text[i].isspace():
-        i += 1
-    if i >= len(text) or text[i] != '"':
-        return None, False
-    i += 1
-    out: list[str] = []
-    escape = False
-    unicode_digits = ""
-    while i < len(text):
-        ch = text[i]
-        if unicode_digits:
-            if ch.lower() in "0123456789abcdef":
-                unicode_digits += ch
-                if len(unicode_digits) == 4:
-                    out.append(chr(int(unicode_digits, 16)))
-                    unicode_digits = ""
-                    escape = False
-                i += 1
-                continue
-            return "".join(out), False
-        if escape:
-            mapping = {
-                '"': '"',
-                "\\": "\\",
-                "/": "/",
-                "b": "\b",
-                "f": "\f",
-                "n": "\n",
-                "r": "\r",
-                "t": "\t",
-            }
-            if ch == "u":
-                unicode_digits = ""
-                i += 1
-                continue
-            if ch not in mapping:
-                return "".join(out), False
-            out.append(mapping[ch])
-            escape = False
-            i += 1
-            continue
-        if ch == "\\":
-            escape = True
-            i += 1
-            continue
-        if ch == '"':
-            return "".join(out), True
-        out.append(ch)
-        i += 1
-    return "".join(out), False
 
 
 async def speak_sentence(
@@ -292,10 +232,15 @@ async def websocket_endpoint(ws: WebSocket):
 
             assistant_text = ""
             assistant_transcription = ""
-            pending_text = ""
+            streamed_response_text = ""
             tts_started = False
             sentence_index = 0
             sentence_queue: asyncio.Queue[str | None] = asyncio.Queue()
+            turn_failed = False
+            final_text = "Okay."
+            final_transcription = ""
+            text_end_sent = False
+            audio_end_sent = False
 
             def is_turn_active() -> bool:
                 return current_turn_id == turn_id and not interrupted.is_set()
@@ -349,11 +294,18 @@ async def websocket_endpoint(ws: WebSocket):
                     if event["type"] == "delta":
                         delta = str(event["delta"])
                         assistant_text += delta
+                        streamed_response_text = assistant_text
                         await ws.send_text(json.dumps({"type": "text_delta", "delta": delta, "turn_id": turn_id}))
-
-                        pending_text, new_sentences = append_sentence_buffer(pending_text, delta)
-                        if new_sentences:
-                            await enqueue_sentences(new_sentences)
+                    elif event["type"] == "replace":
+                        assistant_text = str(event["text"])
+                        streamed_response_text = assistant_text
+                        await ws.send_text(
+                            json.dumps({"type": "text_replace", "text": assistant_text, "turn_id": turn_id})
+                        )
+                    elif event["type"] == "response_item":
+                        sentence = str(event["text"]).strip()
+                        if sentence:
+                            await enqueue_sentences([sentence])
 
                     elif event["type"] == "transcription":
                         transcription = str(event["text"]).replace('<|"|>', "").strip()
@@ -373,40 +325,52 @@ async def websocket_endpoint(ws: WebSocket):
                     elif event["type"] == "done":
                         parsed = event["parsed"]
                         assistant_transcription = str(parsed.get("transcription", "")).strip()
-                        final_response = str(parsed.get("response", "")).strip()
-                        if final_response and final_response != assistant_text:
-                            assistant_text = final_response
+                        final_response = response_text_from_value(parsed.get("response", []))
+                        if final_response.strip():
+                            if final_response != assistant_text:
+                                assistant_text = final_response
+                        elif streamed_response_text.strip():
+                            assistant_text = streamed_response_text
+                        else:
+                            turn_failed = True
                         if assistant_transcription:
                             assistant_transcription = assistant_transcription.replace('<|"|>', "").strip()
 
-                if pending_text.strip():
-                    await enqueue_sentences([pending_text.strip()])
-                    pending_text = ""
+            except Exception as exc:
+                turn_failed = True
+                print(f"LLM turn failed: {exc!r}")
 
             finally:
                 llm_time = time.time() - t0
+                final_transcription = assistant_transcription
+                final_text = assistant_text.strip() or "Okay."
                 await sentence_queue.put(None)
-                await tts_task
+                try:
+                    await tts_task
+                except Exception as exc:
+                    print(f"TTS turn failed: {exc!r}")
 
             if interrupted.is_set():
                 print("Interrupted after LLM, skipping response")
                 continue
 
-            history.append({"role": "assistant", "content": assistant_text or "Okay."})
+            history.append({"role": "assistant", "content": final_text})
 
-            print(f"LLM ({llm_time:.2f}s) [stream]: {assistant_transcription!r} -> {assistant_text}")
+            print(f"LLM ({llm_time:.2f}s) [stream]: {final_transcription!r} -> {final_text}")
 
-            await ws.send_text(
-                json.dumps(
-                    {
-                        "type": "text_end",
-                        "text": assistant_text or "Okay.",
-                        "llm_time": round(llm_time, 2),
-                        "turn_id": turn_id,
-                        **({"transcription": assistant_transcription} if assistant_transcription else {}),
-                    }
+            if not text_end_sent:
+                await ws.send_text(
+                    json.dumps(
+                        {
+                            "type": "text_end",
+                            "text": final_text,
+                            "llm_time": round(llm_time, 2),
+                            "turn_id": turn_id,
+                            **({"transcription": final_transcription} if final_transcription else {}),
+                        }
+                    )
                 )
-            )
+                text_end_sent = True
 
             if is_turn_active():
                 await ws.send_text(
@@ -414,6 +378,18 @@ async def websocket_endpoint(ws: WebSocket):
                         {
                             "type": "audio_end",
                             "tts_time": 0 if sentence_index == 0 else round(time.time() - t0, 2),
+                            "turn_id": turn_id,
+                        }
+                    )
+                )
+                audio_end_sent = True
+
+            if turn_failed and not audio_end_sent and is_turn_active():
+                await ws.send_text(
+                    json.dumps(
+                        {
+                            "type": "audio_end",
+                            "tts_time": 0,
                             "turn_id": turn_id,
                         }
                     )
