@@ -1264,6 +1264,7 @@ function connect() {
         return;
       }
       streamTtsTime = msg.tts_time;
+      syncStreamPlaybackState();
       const meta = messagesDiv.querySelector('.msg.assistant:last-child .meta');
       if (meta) meta.textContent += ` · TTS ${msg.tts_time}s`;
       if (!streamPlaybackStarted && state !== 'listening') {
@@ -1615,14 +1616,24 @@ function float32ToWavBase64(samples) {
 }
 
 // ── Streaming Playback ──
+function resetStreamPlaybackState() {
+  currentSource = null;
+  streamNextTime = 0;
+  streamPlaybackStarted = false;
+}
+
+function syncStreamPlaybackState() {
+  if (streamSources.length === 0) {
+    resetStreamPlaybackState();
+  }
+}
+
 function stopPlayback() {
   for (const src of streamSources) {
     try { src.stop(); } catch {}
   }
   streamSources = [];
-  currentSource = null;
-  streamNextTime = 0;
-  streamPlaybackStarted = false;
+  resetStreamPlaybackState();
 }
 
 function setListeningEnabled(enabled) {
@@ -1705,8 +1716,11 @@ function queueAudioChunk(base64Pcm) {
   source.onended = () => {
     const idx = streamSources.indexOf(source);
     if (idx !== -1) streamSources.splice(idx, 1);
+    if (currentSource === source) {
+      currentSource = streamSources[streamSources.length - 1] || null;
+    }
+    syncStreamPlaybackState();
     if (streamSources.length === 0 && state === 'speaking') {
-      currentSource = null;
       setState('listening');
       setStatus('connected', 'Connected');
     }

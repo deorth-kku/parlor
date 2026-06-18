@@ -27,7 +27,7 @@ load_dotenv()
 SYSTEM_PROMPT = (
     "You are a real-time multimodal AI assistant. "
     "You can understand speech, images, and text. "
-    "Return concise answers and keep responses to 1-4 short sentences. "
+    "Return concise answers and keep responses to 1-4 sentences. "
     "Always transcribe the user's speech faithfully before responding. "
     "When producing structured JSON, set 'response' to an array of short spoken chunks, "
     "with one sentence or speakable clause per item."
