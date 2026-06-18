@@ -961,6 +961,7 @@ function scrollMessagesToBottom(immediate = false) {
 }
 const BAR_COUNT = 40;
 const BAR_GAP = 3;
+const CAPTURE_MAX_WIDTH = 1920;
 let waveformRAF;
 let waveformResizeRAF = 0;
 let ambientPhase = 0;
@@ -1549,13 +1550,14 @@ async function switchVideoSource(source, options = {}) {
   applyVideoLayout();
 }
 
+
 function captureFrame() {
   if (videoSource === 'off' || !video.videoWidth) return null;
   const canvas = document.createElement('canvas');
-  const scale = 320 / video.videoWidth;
-  canvas.width = 320; canvas.height = video.videoHeight * scale;
+  const scale = video.videoWidth > CAPTURE_MAX_WIDTH ? CAPTURE_MAX_WIDTH / video.videoWidth : 1;
+  canvas.width = Math.round(video.videoWidth * scale); canvas.height = Math.round(video.videoHeight * scale);
   canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
-  return canvas.toDataURL('image/jpeg', 0.7).split(',')[1];
+  return canvas.toDataURL('image/jpeg', 0.75).split(',')[1];
 }
 
 // ── VAD Handlers ──
