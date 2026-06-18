@@ -318,7 +318,7 @@ class OpenAICompatibleBackend:
         api_key = os.environ.get("OPENAI_API_KEY", "").strip() or None
         model = os.environ.get("OPENAI_MODEL", "").strip() or None
         timeout = _env_float("OPENAI_TIMEOUT", 120.0)
-        temperature = _env_float("OPENAI_TEMPERATURE", 0.2)
+        temperature = _env_float("OPENAI_TEMPERATURE", 0.2) or None
         max_tokens = _env_int("OPENAI_MAX_TOKENS", 4096)
 
         return cls(
@@ -377,16 +377,17 @@ class OpenAICompatibleBackend:
     ):
         payload: dict[str, Any] = {
             "messages": [*history, {"role": "user", "content": user_content}],
-            "temperature": self._config.temperature,
             "reasoning_format": "none",
             "chat_template_kwargs": {
                 "enable_thinking": False,
             },
             "stream": True,
         }
+        if self._config.temperature:
+            payload["temperature"]= self._config.temperature
         if self._config.model:
             payload["model"] = self._config.model
-        if self._config.max_tokens is not None:
+        if self._config.max_tokens:
             payload["max_tokens"] = self._config.max_tokens
         payload["response_format"] = self._schema()
 
