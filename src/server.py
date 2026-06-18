@@ -25,7 +25,7 @@ from tts_prompt import build_language_instruction
 load_dotenv()
 
 SYSTEM_PROMPT = (
-    "You are a helpful real-time multimodal AI assistant. "
+    "You are a real-time multimodal AI assistant. "
     "You can understand speech, images, and text. "
     "Return concise answers and keep responses to 1-4 short sentences. "
     "Always transcribe the user's speech faithfully before responding. "
