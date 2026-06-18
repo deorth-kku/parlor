@@ -378,6 +378,7 @@ class OpenAICompatibleBackend:
         payload: dict[str, Any] = {
             "messages": [*history, {"role": "user", "content": user_content}],
             "reasoning_format": "none",
+            "thinking_budget_tokens": 0,
             "chat_template_kwargs": {
                 "enable_thinking": False,
             },
