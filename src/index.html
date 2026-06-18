@@ -1235,6 +1235,11 @@ function connect() {
       }
       activeAssistantMsg = null;
       scrollMessagesToBottom(true);
+      if (!streamPlaybackStarted && state === 'processing') {
+        setState('listening');
+        setStatus('connected', 'Connected');
+        activeTurnId = null;
+      }
     } else if (msg.type === 'audio_start') {
       if (msg.turn_id && activeTurnId && msg.turn_id !== activeTurnId) return;
       if (interruptedTurnId && msg.turn_id === interruptedTurnId) return;
@@ -1266,6 +1271,7 @@ function connect() {
         setStatus('connected', 'Connected');
       }
       interruptedTurnId = null;
+      activeTurnId = null;
     }
   };
 }
