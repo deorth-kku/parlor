@@ -369,42 +369,6 @@ class OpenAICompatibleBackend:
             return "\n".join(part for part in parts if part.strip())
         return str(content)
 
-    async def complete_turn(
-        self,
-        history: list[dict[str, Any]],
-        *,
-        user_content: str | list[dict[str, Any]],
-    ) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "messages": [*history, {"role": "user", "content": user_content}],
-            "temperature": self._config.temperature,
-            "reasoning_format": "none",
-            "chat_template_kwargs": {
-                "enable_thinking": False,
-            },
-        }
-        if self._config.model:
-            payload["model"] = self._config.model
-        if self._config.max_tokens is not None:
-            payload["max_tokens"] = self._config.max_tokens
-        payload["response_format"] = self._schema()
-
-        response = await self._client.post("chat/completions", json=payload)
-        if response.status_code >= 400:
-            body = response.text.lower()
-            if "response_format" in body or "json_schema" in body:
-                fallback = dict(payload)
-                fallback.pop("response_format", None)
-                response = await self._client.post("chat/completions", json=fallback)
-            response.raise_for_status()
-
-        data = response.json()
-        choice = data["choices"][0]["message"]
-        content = self._join_message_content(choice.get("content"))
-        parsed = _finalize_structured_payload(content, source="complete_turn")
-        parsed["_usage"] = data.get("usage", {})
-        return parsed
-
     async def stream_turn(
         self,
         history: list[dict[str, Any]],
