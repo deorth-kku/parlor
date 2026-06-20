@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import io
 import json
 import os
 import time
@@ -15,7 +16,8 @@ import numpy as np
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
+from pydantic import BaseModel
 
 import tts
 from openai_backend import OpenAICompatibleBackend, response_text_from_value
@@ -182,6 +184,153 @@ async def model_info():
         return {"model": backend._config.model}
     resolved = await backend.resolve_model()
     return {"model": resolved or "auto"}
+
+
+# ── OpenAI-compatible TTS endpoints ──────────────────────────────────
+
+_TTS_MODELS = [
+    {"id": "kokoro", "object": "model", "created": 1687584915, "owned_by": "hexgrad"},
+]
+
+_AUDIO_FORMATS = {
+    "mp3": {"container": "mp3", "codec": "mp3", "media_type": "audio/mpeg", "extension": "mp3"},
+    "wav": {"container": None, "codec": None, "media_type": "audio/wav", "extension": "wav"},
+    "opus": {"container": "ogg", "codec": "libopus", "media_type": "audio/ogg; codecs=opus", "extension": "opus"},
+    "flac": {"container": "flac", "codec": "flac", "media_type": "audio/flac", "extension": "flac"},
+    "pcm": {"container": None, "codec": None, "media_type": "application/octet-stream", "extension": "pcm"},
+    "aac": {"container": "adts", "codec": "aac", "media_type": "audio/aac", "extension": "aac"},
+}
+
+_SUPPORTED_FORMATS = tuple(_AUDIO_FORMATS)
+
+
+def _detect_language(text: str) -> str:
+    """Detect language from text content: ja, zh, or en."""
+    has_kana = any(0x3040 <= ord(ch) <= 0x30FF for ch in text)
+    has_cjk = any(0x4E00 <= ord(ch) <= 0x9FFF for ch in text)
+    if has_kana:
+        return "ja"
+    if has_cjk:
+        return "zh"
+    return "en"
+
+
+class TTSRequest(BaseModel):
+    model: str = "kokoro"
+    input: str
+    voice: str | None = None
+    response_format: str = "mp3"
+    speed: float = 1.0
+
+
+def _write_wav(pcm: np.ndarray, sr: int) -> bytes:
+    """Encode PCM float32 to a proper WAV file."""
+    pcm_int16 = (pcm * 32767).clip(-32768, 32767).astype(np.int16)
+    data = pcm_int16.tobytes()
+    import struct
+    buf = io.BytesIO()
+    buf.write(b"RIFF")
+    buf.write(struct.pack("<I", 36 + len(data)))
+    buf.write(b"WAVE")
+    buf.write(b"fmt ")
+    buf.write(struct.pack("<I", 16))  # fmt chunk size
+    buf.write(struct.pack("<H", 1))   # PCM
+    buf.write(struct.pack("<H", 1))   # mono
+    buf.write(struct.pack("<I", sr))  # sample rate
+    buf.write(struct.pack("<I", sr * 2))  # byte rate
+    buf.write(struct.pack("<H", 2))   # block align
+    buf.write(struct.pack("<H", 16))  # bits per sample
+    buf.write(b"data")
+    buf.write(struct.pack("<I", len(data)))
+    buf.write(data)
+    return buf.getvalue()
+
+
+async def _encode_audio(pcm: np.ndarray, fmt: str, sr: int) -> bytes:
+    """Encode PCM float32 [-1,1] to the requested format."""
+    fmt = fmt.lower()
+    pcm = np.asarray(pcm, dtype=np.float32).reshape(-1)
+    if fmt not in _AUDIO_FORMATS:
+        raise ValueError(f"Unsupported audio format: {fmt}")
+    if fmt in {"wav", "pcm"}:
+        if fmt == "wav":
+            return _write_wav(pcm, sr)
+        pcm_int16 = (pcm * 32767).clip(-32768, 32767).astype(np.int16)
+        return pcm_int16.tobytes()
+    return _encode_audio_with_pyav(pcm, fmt, sr)
+
+
+def _encode_audio_with_pyav(pcm: np.ndarray, fmt: str, sr: int) -> bytes:
+    fmt_config = _AUDIO_FORMATS[fmt]
+    import av
+
+    arr = (pcm * 32767).clip(-32768, 32767).astype(np.int16)
+    out = io.BytesIO()
+    with av.open(out, mode="w", format=fmt_config["container"]) as out_ctx:
+        stream = out_ctx.add_stream(fmt_config["codec"], rate=sr)
+        stream.layout = "mono"
+        chunk_size = stream.frame_size or 1024
+        for i in range(0, len(arr), chunk_size):
+            chunk = arr[i : i + chunk_size]
+            if len(chunk) == 0:
+                break
+            frame = av.AudioFrame.from_ndarray(
+                chunk.reshape(1, -1), layout="mono", format="s16"
+            )
+            frame.sample_rate = sr
+            for packet in stream.encode(frame):
+                out_ctx.mux(packet)
+        for packet in stream.encode(None):
+            out_ctx.mux(packet)
+    return out.getvalue()
+
+
+def _error_response(message: str, error_type: str, param: str | None, status_code: int) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={"error": {"message": message, "type": error_type, "param": param, "code": status_code}},
+    )
+
+
+
+@app.get("/v1/audio/models")
+async def tts_model_list():
+    return {"object": "list", "data": _TTS_MODELS}
+
+
+@app.post("/v1/audio/speech")
+async def tts_speech(req: TTSRequest):
+    if tts_backend is None:
+        return _error_response("TTS backend not loaded", "server_error", None, 500)
+
+    response_format = req.response_format.lower()
+    if response_format not in _SUPPORTED_FORMATS:
+        return _error_response(
+            f"Invalid response format: {req.response_format}",
+            "invalid_request_error",
+            "response_format",
+            400,
+        )
+
+    try:
+        language = _detect_language(req.input)
+        voice = req.voice if req.voice else resolve_tts_selection({"tts_language":language})[1]
+        pcm = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: tts_backend.generate(req.input, language, voice, speed=req.speed),
+        )
+        audio_bytes = await _encode_audio(pcm, response_format, tts_backend.sample_rate)
+        format_config = _AUDIO_FORMATS[response_format]
+        return Response(
+            content=audio_bytes,
+            media_type=format_config["media_type"],
+            headers={"Content-Disposition": f'attachment; filename="speech.{format_config["extension"]}"'}
+        )
+    except ValueError as exc:
+        return _error_response(str(exc), "invalid_request_error", "voice", 400)
+    except Exception as exc:
+        print(exc)
+        return _error_response(str(exc), "server_error", None, 500)
 
 
 @app.websocket("/ws")
