@@ -1,11 +1,12 @@
 import unittest
 from pathlib import Path
 import sys
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from voices_catalog import load_voice_catalog
-from tts import ONNXBackend
+from tts import ONNXBackend, _build_provider_config, _memory_arena_shrink_target, _provider_name_from_env
 from tts_prompt import build_language_instruction
 
 
@@ -39,6 +40,46 @@ class RoutingTests(unittest.TestCase):
         instruction = build_language_instruction("zh", "zf_xiaoxiao")
         self.assertIn("TTS language selected by user: zh", instruction)
         self.assertIn("TTS voice selected by user: zf_xiaoxiao", instruction)
+
+
+class RuntimeConfigTests(unittest.TestCase):
+    def test_provider_defaults_to_cpu_without_env(self):
+        with mock.patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(_provider_name_from_env(), "CPUExecutionProvider")
+
+    def test_cuda_provider_options_default_to_same_as_requested(self):
+        with mock.patch.dict("os.environ", {}, clear=True):
+            providers = _build_provider_config("CUDAExecutionProvider")
+        self.assertEqual(providers, [("CUDAExecutionProvider", {"arena_extend_strategy": "kSameAsRequested"})])
+
+    def test_cuda_provider_options_include_optional_env_overrides(self):
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "ORT_CUDA_ARENA_EXTEND_STRATEGY": "kNextPowerOfTwo",
+                "ORT_CUDA_GPU_MEM_LIMIT": "2147483648",
+                "ORT_CUDA_USE_EP_LEVEL_UNIFIED_STREAM": "1",
+            },
+            clear=True,
+        ):
+            providers = _build_provider_config("CUDAExecutionProvider")
+        self.assertEqual(
+            providers,
+            [
+                (
+                    "CUDAExecutionProvider",
+                    {
+                        "arena_extend_strategy": "kNextPowerOfTwo",
+                        "gpu_mem_limit": "2147483648",
+                        "use_ep_level_unified_stream": "1",
+                    },
+                )
+            ],
+        )
+
+    def test_memory_arena_shrink_target_matches_provider(self):
+        self.assertEqual(_memory_arena_shrink_target("CPUExecutionProvider"), "cpu:0")
+        self.assertEqual(_memory_arena_shrink_target("CUDAExecutionProvider"), "gpu:0")
 
 
 if __name__ == "__main__":
