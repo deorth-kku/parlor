@@ -23,7 +23,7 @@ import tts
 from openai_backend import OpenAICompatibleBackend, response_text_from_value
 from voices_catalog import VOICE_CATALOG
 from tts_prompt import build_language_instruction
-
+from voices_data import LANGUAGES
 load_dotenv()
 
 SYSTEM_PROMPT = (
@@ -314,7 +314,22 @@ async def tts_speech(req: TTSRequest):
 
     try:
         language = _detect_language(req.input)
-        voice = req.voice if req.voice else resolve_tts_selection({"tts_language":language})[1]
+        if req.voice:
+            voices = req.voice.split("+")
+            if len(voices)==1:
+                voice=voices[0]
+            else:
+                voice=resolve_tts_selection({"tts_language":language})[1]
+                aval=LANGUAGES.get(language,[])['voices']
+                for vo in voices:
+                    if vo in aval:
+                        voice=vo
+                        break
+                print(f"raw:{voices}, selected:{voice}")
+        else:
+            voice = resolve_tts_selection({"tts_language":language})[1]
+
+        
         pcm = await asyncio.get_event_loop().run_in_executor(
             None,
             lambda: tts_backend.generate(req.input, language, voice, speed=req.speed),
