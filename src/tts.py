@@ -27,7 +27,6 @@ class TTSBackend:
 class _LanguageRuntime:
     language: str
     voices: set[str]
-    model: object
     g2p: object
 
 
@@ -133,7 +132,7 @@ class ONNXBackend(TTSBackend):
         self._ja = ja.JAG2P(version="pyopenjtalk")
         self._zh = zh.ZHG2P(version="1.1", en_callable=lambda text: self._en_us(text)[0])
 
-        model, session_meta = _create_kokoro_session(
+        self.model, session_meta = _create_kokoro_session(
             self._ort,
             self._kokoro_onnx,
             self._model_path,
@@ -144,26 +143,23 @@ class ONNXBackend(TTSBackend):
             "memory.enable_memory_arena_shrinkage",
             _memory_arena_shrink_target(session_meta["provider_name"]),
         )
-        self._install_run_options(model)
+        self._install_run_options()
         self._session_meta = session_meta
 
-        self._runtimes = {
+        self._langs = {
             "en": _LanguageRuntime(
                 language="en",
                 voices=set(VOICE_CATALOG.languages["en"]["voices"]),
-                model=model,
                 g2p=None,
             ),
             "ja": _LanguageRuntime(
                 language="ja",
                 voices=set(VOICE_CATALOG.languages["ja"]["voices"]),
-                model=model,
                 g2p=self._ja,
             ),
             "zh": _LanguageRuntime(
                 language="zh",
                 voices=set(VOICE_CATALOG.languages["zh"]["voices"]),
-                model=model,
                 g2p=self._zh,
             ),
         }
@@ -183,16 +179,16 @@ class ONNXBackend(TTSBackend):
         message = str(exc).lower()
         return "failed to allocate memory" in message or "cuda" in message and "out of memory" in message
 
-    def _install_run_options(self, model: object) -> None:
+    def _install_run_options(self) -> None:
         max_phoneme_length = self._kokoro_onnx.MAX_PHONEME_LENGTH
         run_options = self._run_options
 
         def _create_audio_with_run_options(phonemes: str, voice: np.ndarray, speed: float):
             phonemes = phonemes[:max_phoneme_length]
-            tokens = np.array(model.tokenizer.tokenize(phonemes), dtype=np.int64)
+            tokens = np.array(self.model.tokenizer.tokenize(phonemes), dtype=np.int64)
             voice_slice = voice[len(tokens)]
             tokens_input = [[0, *tokens, 0]]
-            if "input_ids" in [i.name for i in model.sess.get_inputs()]:
+            if "input_ids" in [i.name for i in self.model.sess.get_inputs()]:
                 inputs = {
                     "input_ids": tokens_input,
                     "style": np.array(voice_slice, dtype=np.float32),
@@ -204,10 +200,10 @@ class ONNXBackend(TTSBackend):
                     "style": voice_slice,
                     "speed": np.ones(1, dtype=np.float32) * speed,
                 }
-            audio = model.sess.run(None, inputs, run_options=run_options)[0]
+            audio = self.model.sess.run(None, inputs, run_options=run_options)[0]
             return audio, self.sample_rate
 
-        model._create_audio = _create_audio_with_run_options
+        self.model._create_audio = _create_audio_with_run_options
 
     def _rebuild_model_locked(self) -> None:
         model, session_meta = _create_kokoro_session(
@@ -222,16 +218,15 @@ class ONNXBackend(TTSBackend):
             "memory.enable_memory_arena_shrinkage",
             _memory_arena_shrink_target(session_meta["provider_name"]),
         )
-        self._install_run_options(model)
-        for runtime in self._runtimes.values():
-            runtime.model = model
+        self._install_run_options()
+        self.model=model
         self._session_meta = session_meta
 
     def _run_model_create(self, runtime: _LanguageRuntime, phonemes: str, voice: str, speed: float) -> np.ndarray:
         concurrency_guard = self._gpu_semaphore if self._session_meta.get("gpu_enabled") else nullcontext()
         with concurrency_guard:
             try:
-                pcm, _sr = runtime.model.create(phonemes, voice=voice, speed=speed, is_phonemes=True)
+                pcm, _sr = self.model.create(phonemes, voice=voice, speed=speed, is_phonemes=True)
                 return pcm
             except Exception as exc:
                 if not self._session_meta.get("gpu_enabled") or not self._is_oom_error(exc):
@@ -239,16 +234,16 @@ class ONNXBackend(TTSBackend):
                 print("TTS GPU OOM detected, rebuilding ONNX session and retrying once")
                 with self._session_lock:
                     self._rebuild_model_locked()
-                    runtime = self._runtimes[runtime.language]
-                    pcm, _sr = runtime.model.create(phonemes, voice=voice, speed=speed, is_phonemes=True)
+                    runtime = self._langs[runtime.language]
+                    pcm, _sr = self.model.create(phonemes, voice=voice, speed=speed, is_phonemes=True)
                     return pcm
 
     def generate(self, text: str, language: str, voice: str, speed: float = 1.1) -> np.ndarray:
-        if language not in self._runtimes:
+        if language not in self._langs:
             raise ValueError(f"Unsupported language: {language}")
         self._validate_voice(language, voice)
 
-        runtime = self._runtimes[language]
+        runtime = self._langs[language]
         t0 = time.time()
 
         if language == "en":
