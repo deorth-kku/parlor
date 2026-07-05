@@ -315,28 +315,37 @@ async def tts_speech(req: TTSRequest):
         )
 
     try:
+        # ── Step 1: Detect language from input text ──
         language = _detect_language(req.input)
         print(f"[TTS] input_len={len(req.input)}, language={language}, voice={req.voice}, format={response_format}, speed={req.speed}")
-        
+
+        # ── Step 2: Resolve voice selection ──
+        # If client provides a voice, use it directly (or pick from + blend if multiple).
+        # Otherwise, fall back to the default voice for the detected language.
         if req.voice:
             voices = req.voice.split("+")
-            if len(voices)==1:
-                voice=voices[0]
+            if len(voices) == 1:
+                voice = voices[0]
             else:
-                voice=resolve_tts_selection({"tts_language":language})[1]
-                aval=LANGUAGES.get(language,[])['voices']
+                # For blended voices, pick the first valid one from the catalog
+                voice = resolve_tts_selection({"tts_language": language})[1]
+                aval = LANGUAGES.get(language, [])['voices']
                 for vo in voices:
                     if vo in aval:
-                        voice=vo
+                        voice = vo
                         break
                 print(f"[TTS] raw:{voices}, selected:{voice}")
         else:
-            voice = resolve_tts_selection({"tts_language":language})[1]
+            voice = resolve_tts_selection({"tts_language": language})[1]
 
-        # Validate voice exists in catalog
+        # ── Step 3: Validate voice exists in catalog ──
+        # This is a hard error — invalid voice means client misconfiguration.
         if voice not in VOICE_CATALOG.languages.get(language, {}).get("voices", []):
             available = VOICE_CATALOG.languages.get(language, {}).get("voices", [])
-            error_msg = f"Voice '{voice}' not found for language '{language}'. Available voices: {', '.join(available[:10])}{'...' if len(available) > 10 else ''}"
+            error_msg = (
+                f"Voice '{voice}' not found for language '{language}'. "
+                f"Available voices: {', '.join(available[:10])}{'...' if len(available) > 10 else ''}"
+            )
             print(f"[TTS 400] {error_msg}")
             return _error_response(
                 error_msg,
@@ -345,22 +354,34 @@ async def tts_speech(req: TTSRequest):
                 400,
             )
 
+        # ── Step 4: Generate audio ──
+        # ValueError (e.g. text too short, no phonemes) → return 1s silence + warning log.
+        # Other exceptions → return 500 with full traceback.
         try:
             pcm = await asyncio.get_event_loop().run_in_executor(
                 None,
                 lambda: tts_backend.generate(req.input, language, voice, speed=req.speed),
             )
         except ValueError as exc:
-            error_msg = f"TTS generate failed: {exc} (text='{req.input[:100]}', language={language}, voice={voice}, speed={req.speed})"
-            print(f"[TTS 400] {error_msg}")
-            return _error_response(error_msg, "invalid_request_error", "voice", 400)
+            # Graceful degradation: text is un-speakable (too short, no phonemes, etc.)
+            # Return a short silence clip instead of failing the request.
+            warning_msg = (
+                f"TTS skipped: {exc} "
+                f"(text='{req.input[:100]}', language={language}, voice={voice}, speed={req.speed})"
+            )
+            print(f"[TTS WARN] {warning_msg}")
+            pcm = np.zeros(tts_backend.sample_rate, dtype=np.float32)  # 1 second of silence
         except Exception as exc:
             import traceback
-            error_msg = f"TTS generate failed: {type(exc).__name__}: {exc} (text='{req.input[:100]}', language={language}, voice={voice}, speed={req.speed})"
+            error_msg = (
+                f"TTS generate failed: {type(exc).__name__}: {exc} "
+                f"(text='{req.input[:100]}', language={language}, voice={voice}, speed={req.speed})"
+            )
             print(f"[TTS 500] {error_msg}")
             print(traceback.format_exc())
             return _error_response(error_msg, "server_error", None, 500)
 
+        # ── Step 5: Encode and return audio ──
         audio_bytes = await _encode_audio(pcm, response_format, tts_backend.sample_rate)
         format_config = _AUDIO_FORMATS[response_format]
         return Response(
