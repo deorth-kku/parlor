@@ -370,7 +370,7 @@ async def tts_speech(req: TTSRequest):
                 f"(text='{req.input[:100]}', language={language}, voice={voice}, speed={req.speed})"
             )
             print(f"[TTS WARN] {warning_msg}")
-            pcm = np.zeros(tts_backend.sample_rate, dtype=np.float32)  # 1 second of silence
+            pcm = np.zeros(tts_backend.sample_rate / 10, dtype=np.float32)  # 0.1 second of silence
         except Exception as exc:
             import traceback
             error_msg = (
