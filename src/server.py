@@ -305,8 +305,10 @@ async def tts_speech(req: TTSRequest):
 
     response_format = req.response_format.lower()
     if response_format not in _SUPPORTED_FORMATS:
+        error_msg = f"Invalid response format: '{req.response_format}'. Supported formats: {', '.join(_SUPPORTED_FORMATS)}"
+        print(f"[TTS 400] {error_msg}")
         return _error_response(
-            f"Invalid response format: {req.response_format}",
+            error_msg,
             "invalid_request_error",
             "response_format",
             400,
@@ -314,6 +316,8 @@ async def tts_speech(req: TTSRequest):
 
     try:
         language = _detect_language(req.input)
+        print(f"[TTS] input_len={len(req.input)}, language={language}, voice={req.voice}, format={response_format}, speed={req.speed}")
+        
         if req.voice:
             voices = req.voice.split("+")
             if len(voices)==1:
@@ -325,11 +329,22 @@ async def tts_speech(req: TTSRequest):
                     if vo in aval:
                         voice=vo
                         break
-                print(f"raw:{voices}, selected:{voice}")
+                print(f"[TTS] raw:{voices}, selected:{voice}")
         else:
             voice = resolve_tts_selection({"tts_language":language})[1]
 
-        
+        # Validate voice exists in catalog
+        if voice not in VOICE_CATALOG.languages.get(language, {}).get("voices", []):
+            available = VOICE_CATALOG.languages.get(language, {}).get("voices", [])
+            error_msg = f"Voice '{voice}' not found for language '{language}'. Available voices: {', '.join(available[:10])}{'...' if len(available) > 10 else ''}"
+            print(f"[TTS 400] {error_msg}")
+            return _error_response(
+                error_msg,
+                "invalid_request_error",
+                "voice",
+                400,
+            )
+
         pcm = await asyncio.get_event_loop().run_in_executor(
             None,
             lambda: tts_backend.generate(req.input, language, voice, speed=req.speed),
@@ -342,10 +357,15 @@ async def tts_speech(req: TTSRequest):
             headers={"Content-Disposition": f'attachment; filename="speech.{format_config["extension"]}"'}
         )
     except ValueError as exc:
-        return _error_response(str(exc), "invalid_request_error", "voice", 400)
+        error_msg = f"ValueError: {exc}"
+        print(f"[TTS 400] {error_msg}")
+        return _error_response(error_msg, "invalid_request_error", "voice", 400)
     except Exception as exc:
-        print(exc)
-        return _error_response(str(exc), "server_error", None, 500)
+        import traceback
+        error_msg = f"{type(exc).__name__}: {exc}"
+        print(f"[TTS 500] {error_msg}")
+        print(traceback.format_exc())
+        return _error_response(error_msg, "server_error", None, 500)
 
 
 @app.websocket("/ws")
