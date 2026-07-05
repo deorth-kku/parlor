@@ -206,21 +206,10 @@ class ONNXBackend(TTSBackend):
         self.model._create_audio = _create_audio_with_run_options
 
     def _rebuild_model_locked(self) -> None:
-        model, session_meta = _create_kokoro_session(
-            self._ort,
-            self._kokoro_onnx,
-            self._model_path,
-            self._voices_path,
-            self._config_path,
-        )
-        self._run_options = self._ort.RunOptions()
-        self._run_options.add_run_config_entry(
-            "memory.enable_memory_arena_shrinkage",
-            _memory_arena_shrink_target(session_meta["provider_name"]),
-        )
-        self._install_run_options()
-        self.model=model
-        self._session_meta = session_meta
+        # _reset_session releases the old C++ InferenceSession and creates a new one
+        # with the same providers/options, freeing GPU memory at the C++ layer.
+        old_session = self.model.sess
+        old_session._reset_session(old_session.get_providers(), old_session.get_provider_options())
 
     def _run_model_create(self, runtime: _LanguageRuntime, phonemes: str, voice: str, speed: float) -> np.ndarray:
         concurrency_guard = self._gpu_semaphore if self._session_meta.get("gpu_enabled") else nullcontext()
