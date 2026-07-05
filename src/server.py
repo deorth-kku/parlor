@@ -345,10 +345,22 @@ async def tts_speech(req: TTSRequest):
                 400,
             )
 
-        pcm = await asyncio.get_event_loop().run_in_executor(
-            None,
-            lambda: tts_backend.generate(req.input, language, voice, speed=req.speed),
-        )
+        try:
+            pcm = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: tts_backend.generate(req.input, language, voice, speed=req.speed),
+            )
+        except ValueError as exc:
+            error_msg = f"TTS generate failed: {exc} (text='{req.input[:100]}', language={language}, voice={voice}, speed={req.speed})"
+            print(f"[TTS 400] {error_msg}")
+            return _error_response(error_msg, "invalid_request_error", "voice", 400)
+        except Exception as exc:
+            import traceback
+            error_msg = f"TTS generate failed: {type(exc).__name__}: {exc} (text='{req.input[:100]}', language={language}, voice={voice}, speed={req.speed})"
+            print(f"[TTS 500] {error_msg}")
+            print(traceback.format_exc())
+            return _error_response(error_msg, "server_error", None, 500)
+
         audio_bytes = await _encode_audio(pcm, response_format, tts_backend.sample_rate)
         format_config = _AUDIO_FORMATS[response_format]
         return Response(
@@ -356,13 +368,9 @@ async def tts_speech(req: TTSRequest):
             media_type=format_config["media_type"],
             headers={"Content-Disposition": f'attachment; filename="speech.{format_config["extension"]}"'}
         )
-    except ValueError as exc:
-        error_msg = f"ValueError: {exc}"
-        print(f"[TTS 400] {error_msg}")
-        return _error_response(error_msg, "invalid_request_error", "voice", 400)
     except Exception as exc:
         import traceback
-        error_msg = f"{type(exc).__name__}: {exc}"
+        error_msg = f"Unexpected error: {type(exc).__name__}: {exc}"
         print(f"[TTS 500] {error_msg}")
         print(traceback.format_exc())
         return _error_response(error_msg, "server_error", None, 500)

@@ -255,6 +255,11 @@ class ONNXBackend(TTSBackend):
         else:
             phonemes, _ = runtime.g2p(text)
 
+        if not phonemes or not phonemes.strip():
+            raise ValueError(
+                f"Text too short or produced no phonemes for language '{language}': '{text}'"
+            )
+
         pcm = self._run_model_create(runtime, phonemes, voice, speed)
         print(
             f"tts provider={self._session_meta['provider_name']} providers={self._session_meta['providers']} "
