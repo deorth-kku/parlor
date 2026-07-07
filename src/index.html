@@ -910,6 +910,42 @@ function refreshElements() {
   applyVideoLayout();
   updateMirrorToggleUI();
   updateStateUI();
+
+  // Re-render dropdowns into the newly active layout (options may have been
+  // rendered into the other layout's selects which are now hidden).
+  if (ttsOptions) {
+    renderLanguageOptions();
+    if (languageSelect.value) {
+      renderVoiceOptions(languageSelect.value, selectedVoice);
+    }
+  }
+
+  // Re-populate video device dropdowns in both layouts
+  if (videoDeviceLabels.size > 0) {
+    const allDevices = Array.from(videoDeviceLabels.entries()).map(([id, label]) => ({
+      deviceId: id,
+      label: label,
+      kind: 'videoinput'
+    }));
+    populateVideoSelect(allDevices);
+  }
+
+  // Sync message history between layouts so conversations remain visible
+  // regardless of which layout is currently shown.
+  syncMessagesBetweenLayouts();
+}
+
+function syncMessagesBetweenLayouts() {
+  const pcMsgs = document.querySelector('.pc-layout .transcript');
+  const mobileMsgs = document.querySelector('.mobile-layout .transcript');
+  if (!pcMsgs || !mobileMsgs) return;
+  const pcHas = pcMsgs.children.length > 0;
+  const mobileHas = mobileMsgs.children.length > 0;
+  if (pcHas && !mobileHas) {
+    mobileMsgs.innerHTML = pcMsgs.innerHTML;
+  } else if (mobileHas && !pcHas) {
+    pcMsgs.innerHTML = mobileMsgs.innerHTML;
+  }
 }
 
 let ws, mediaStream, myvad, audioStream;
@@ -1418,7 +1454,13 @@ async function enumerateVideoDevices() {
     probe.getTracks().forEach(t => t.stop());
     const videoInputs = devices.filter(d => d.kind === 'videoinput');
     videoDeviceLabels = new Map(videoInputs.map(d => [d.deviceId, d.label || '']));
-    const select = inputSourceSelect;
+    populateVideoSelect(videoInputs);
+  } catch (e) { console.warn('Enumerate devices failed:', e.message); }
+}
+
+function populateVideoSelect(videoInputs) {
+  const selects = document.querySelectorAll('select#inputSourceSelect');
+  for (const select of selects) {
     select.innerHTML = '';
     const offOpt = document.createElement('option');
     offOpt.value = 'off';
@@ -1441,7 +1483,7 @@ async function enumerateVideoDevices() {
       select.value = 'off';
       saveVideoSourceSelection('off');
     }
-  } catch (e) { console.warn('Enumerate devices failed:', e.message); }
+  }
 }
 
 async function stopStream() {
@@ -1745,6 +1787,11 @@ function addMessage(role, text, meta, isHtml = false) {
     div.appendChild(metaDiv);
   }
   messagesDiv.appendChild(div);
+  // Mirror to the other layout so messages are visible regardless of current layout
+  const other = messagesDiv.parentElement.classList.contains('pc-layout')
+    ? document.querySelector('.mobile-layout .transcript')
+    : document.querySelector('.pc-layout .transcript');
+  if (other) other.appendChild(div.cloneNode(true));
   scrollMessagesToBottom(true);
   return div;
 }
@@ -1761,6 +1808,22 @@ function updateLatestUserMessage(text) {
     }
   }
   lastUserMsg.insertBefore(document.createTextNode(text), meta || null);
+
+  // Mirror to the other layout
+  const other = messagesDiv.parentElement.classList.contains('pc-layout')
+    ? document.querySelector('.mobile-layout .transcript')
+    : document.querySelector('.pc-layout .transcript');
+  if (other) {
+    const otherUserMsgs = other.querySelectorAll('.msg.user');
+    const otherLast = otherUserMsgs[otherUserMsgs.length - 1];
+    if (otherLast) {
+      const otherMeta = otherLast.querySelector('.meta');
+      for (const node of [...otherLast.childNodes]) {
+        if (node !== otherMeta) otherLast.removeChild(node);
+      }
+      otherLast.insertBefore(document.createTextNode(text), otherMeta || null);
+    }
+  }
   scrollMessagesToBottom();
 }
 
