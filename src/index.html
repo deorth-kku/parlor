@@ -133,6 +133,10 @@
     letter-spacing: 0.04em;
     text-transform: uppercase;
     transition: color 0.3s, background 0.3s;
+    cursor: pointer;
+  }
+  .status-pill:hover {
+    background: var(--c-surface-hover);
   }
 
   .status-pill::before {
@@ -151,6 +155,8 @@
   .status-pill.processing::before { background: var(--c-process); }
   .status-pill.speaking { color: #818cf8; background: rgba(129,140,248,0.12); }
   .status-pill.speaking::before { background: #818cf8; }
+  .status-pill.muted { color: #f87171; background: rgba(248,113,113,0.1); }
+  .status-pill.muted::before { background: #f87171; }
 
   /* ── Main layout (PC only, hidden on mobile) ── */
   .pc-layout {
@@ -251,58 +257,6 @@
     background: var(--c-listen-dim);
     color: var(--c-listen);
     border-color: rgba(74,222,128,0.15);
-  }
-
-  .state-indicator {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 12.5px;
-    font-weight: 500;
-    color: var(--c-text-dim);
-    transition: color 0.3s;
-    padding: 10px 12px;
-    background: rgba(255,255,255,0.02);
-    border-radius: 10px;
-    border: 1px solid transparent;
-    appearance: none;
-    width: 100%;
-    text-align: left;
-    cursor: pointer;
-  }
-
-  .state-indicator:hover {
-    color: var(--c-text);
-    background: rgba(255,255,255,0.04);
-  }
-
-  .state-indicator.paused {
-    color: #fca5a5;
-    background: rgba(248,113,113,0.08);
-    border-color: rgba(248,113,113,0.18);
-  }
-
-  .state-indicator .dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--glow);
-    transition: background 0.3s;
-    box-shadow: 0 0 8px var(--glow-dim);
-  }
-  .state-indicator .dot.listening { animation: dot-pulse 2s ease-in-out infinite; }
-  .state-indicator .dot.processing { animation: dot-pulse 0.6s ease-in-out infinite; }
-  .state-indicator .dot.speaking { animation: dot-pulse 1s ease-in-out infinite; }
-  .state-indicator .dot.loading { animation: dot-pulse 2.5s ease-in-out infinite; }
-  .state-indicator .dot.muted {
-    animation: none;
-    background: #f87171;
-    box-shadow: 0 0 8px rgba(248,113,113,0.22);
-  }
-
-  @keyframes dot-pulse {
-    0%, 100% { opacity: 1; transform: scale(1); }
-    50% { opacity: 0.4; transform: scale(0.8); }
   }
 
   /* ── Center column ── */
@@ -594,48 +548,13 @@
     max-width: 640px;
   }
 
-  .mobile-layout .selectors {
-    width: 100%;
-    max-width: 640px;
-    display: flex;
-    gap: 10px;
-    padding: 0 4px 10px;
-    z-index: 2;
-  }
-
-  .mobile-layout .selector {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  .mobile-layout .selector label {
-    font-size: 10px;
-    color: var(--c-text-dim);
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-  }
-
-  .mobile-layout .selector select {
-    appearance: none;
-    padding: 10px 12px;
-    border-radius: 10px;
-    border: 1px solid rgba(255,255,255,0.08);
-    background: var(--c-surface);
-    color: var(--c-text-bright);
-    font-family: var(--font-body);
-    font-size: 13px;
-    outline: none;
-  }
-
   .mobile-layout .controls {
     width: 100%;
     max-width: 640px;
     padding: 12px 4px 4px;
     display: flex;
     align-items: flex-end;
-    gap: 10px;
+    gap: 8px;
     flex-shrink: 0;
     z-index: 2;
   }
@@ -644,23 +563,6 @@
     flex: 1 1 0;
     min-width: 0;
     margin-bottom: 0;
-  }
-
-  .mobile-layout .controls-meta {
-    flex: 0 1 auto;
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    justify-content: flex-start;
-    gap: 14px;
-    padding: 0 0 10px;
-    flex-wrap: wrap;
-  }
-
-  .mobile-layout .controls .state-indicator,
-  .mobile-layout .controls .on-device-pill {
-    flex: 0 0 auto;
-    align-self: center;
   }
 
   .mobile-layout .ctrl-btn {
@@ -684,52 +586,6 @@
     background: var(--c-listen-dim);
     color: var(--c-listen);
     border-color: rgba(74,222,128,0.15);
-  }
-
-  .mobile-layout .state-indicator {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    font-size: 12.5px;
-    font-weight: 500;
-    color: var(--c-text-dim);
-    transition: color 0.3s;
-    padding: 6px 10px;
-    background: rgba(255,255,255,0.02);
-    border-radius: 999px;
-    border: 1px solid transparent;
-    cursor: pointer;
-    appearance: none;
-    width: auto;
-    max-width: 100%;
-    min-width: 0;
-    flex: 0 1 auto;
-    white-space: nowrap;
-  }
-
-  .mobile-layout .on-device-pill {
-    white-space: nowrap;
-  }
-
-  .mobile-layout .state-indicator .dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--glow);
-    transition: background 0.3s;
-    box-shadow: 0 0 8px var(--glow-dim);
-  }
-  .mobile-layout .state-indicator .dot.listening { animation: dot-pulse 2s ease-in-out infinite; }
-  .mobile-layout .state-indicator .dot.processing { animation: dot-pulse 0.6s ease-in-out infinite; }
-  .mobile-layout .state-indicator .dot.speaking { animation: dot-pulse 1s ease-in-out infinite; }
-  .mobile-layout .state-indicator .dot.loading { animation: dot-pulse 2.5s ease-in-out infinite; }
-  .mobile-layout .state-indicator .dot.muted { animation: none; }
-
-  .mobile-layout .state-indicator.paused {
-    color: #fca5a5;
-    background: rgba(248,113,113,0.08);
-    border-color: rgba(248,113,113,0.18);
   }
 
   /* ── Responsive ── */
@@ -774,20 +630,6 @@
       </div>
     </div>
 
-    <div class="side-section">
-      <h3>Status</h3>
-      <button id="stateIndicator" class="state-indicator" type="button" aria-pressed="true">
-        <div id="stateDot" class="dot loading"></div>
-        <span id="stateText">Loading...</span>
-      </button>
-    </div>
-
-    <div class="side-section">
-      <span class="on-device-pill">
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="4" width="12" height="9" rx="2"/><path d="M5 4V3a3 3 0 0 1 6 0v1"/></svg>
-        Multimodal
-      </span>
-    </div>
   </aside>
 
   <!-- Center column: video + chat -->
@@ -840,32 +682,19 @@
     <!-- Transcript -->
     <div id="messages" class="transcript"></div>
 
-    <div class="selectors">
-      <div class="selector">
+    <!-- Controls -->
+    <div class="controls">
+      <div class="side-selector">
         <label for="languageSelect">Language</label>
         <select id="languageSelect"></select>
       </div>
-      <div class="selector">
+      <div class="side-selector">
         <label for="voiceSelect">Voice</label>
         <select id="voiceSelect" disabled></select>
       </div>
-    </div>
-
-    <!-- Controls -->
-    <div class="controls">
-      <div class="side-selector" style="flex: 1;">
+      <div class="side-selector">
         <label for="inputSourceSelect">Video</label>
         <select id="inputSourceSelect"></select>
-      </div>
-      <div class="controls-meta">
-        <button id="stateIndicator" class="state-indicator" type="button" aria-pressed="true">
-          <div id="stateDot" class="dot loading"></div>
-          <span id="stateText">Loading...</span>
-        </button>
-        <span class="on-device-pill">
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="4" width="12" height="9" rx="2"/><path d="M5 4V3a3 3 0 0 1 6 0v1"/></svg>
-          Multimodal
-        </span>
       </div>
     </div>
   </div>
@@ -882,10 +711,8 @@ function $$(id) {
   return document.getElementById(id);
 }
 let video, inputSourceSelect, languageSelect, voiceSelect, messagesDiv, statusEl;
-let stateDot, stateText, viewportWrap, viewportGlow, waveformCanvas, waveformCtx, mirrorToggleBtn, stateIndicatorBtn;
+let viewportWrap, viewportGlow, waveformCanvas, waveformCtx, mirrorToggleBtn;
 let mirrorToggleBoundEl = null;
-let stateIndicatorBoundEl = null;
-
 function refreshElements() {
   video = $$('video');
   inputSourceSelect = $$('inputSourceSelect');
@@ -893,16 +720,12 @@ function refreshElements() {
   voiceSelect = $$('voiceSelect');
   messagesDiv = $$('messages');
   statusEl = $$('status');
-  stateDot = $$('stateDot');
-  stateText = $$('stateText');
   viewportWrap = $$('viewportWrap');
   viewportGlow = viewportWrap ? viewportWrap.querySelector('.viewport-glow') : null;
   waveformCanvas = $$('waveform');
   waveformCtx = waveformCanvas.getContext('2d');
   mirrorToggleBtn = $$('mirrorToggle');
-  stateIndicatorBtn = $$('stateIndicator');
   syncMirrorToggleBinding();
-  syncStateIndicatorBinding();
   if (video) {
     video.srcObject = mediaStream || null;
     video.classList.toggle('mirror', currentMirrorState);
@@ -1149,26 +972,30 @@ function getDisplayedState() {
 }
 
 function updateStateUI() {
-  if (!stateDot || !stateText || !viewportWrap) return;
+  if (!viewportWrap) return;
   const displayedState = getDisplayedState();
 
-  stateDot.className = `dot ${displayedState}`;
-  const labels = {
-    loading: 'Loading...',
-    listening: 'Listening',
-    muted: 'Listening Off',
-    processing: 'Thinking...',
-    speaking: 'Speaking'
-  };
-  stateText.textContent = labels[displayedState] || displayedState;
-
   viewportWrap.className = `viewport-wrap ${state}${displayedState === 'muted' ? ' paused' : ''}`;
-  if (stateIndicatorBtn) {
-    stateIndicatorBtn.classList.toggle('paused', !listeningEnabled);
-    stateIndicatorBtn.setAttribute('aria-pressed', String(listeningEnabled));
-    stateIndicatorBtn.title = listeningEnabled
-      ? 'Click to temporarily turn off voice listening'
-      : 'Click to resume voice listening';
+
+  if (statusEl) {
+    const statusLabels = {
+      loading: 'Loading...',
+      listening: listeningEnabled ? 'Listening' : 'Listening Off',
+      muted: 'Listening Off',
+      processing: 'Processing',
+      speaking: 'Speaking'
+    };
+    const statusClasses = {
+      loading: '',
+      listening: listeningEnabled ? 'connected' : 'muted',
+      muted: 'muted',
+      processing: 'processing',
+      speaking: 'speaking'
+    };
+    const label = statusLabels[displayedState] || displayedState;
+    const cls = statusClasses[displayedState] || '';
+    statusEl.textContent = label;
+    statusEl.className = `status-pill ${cls}`;
   }
 
   if (state !== 'speaking') {
@@ -1403,16 +1230,6 @@ function syncMirrorToggleBinding() {
     mirrorToggleBtn.addEventListener('click', toggleMirrorOverride);
   }
   mirrorToggleBoundEl = mirrorToggleBtn;
-}
-
-function syncStateIndicatorBinding() {
-  if (stateIndicatorBoundEl && stateIndicatorBoundEl !== stateIndicatorBtn) {
-    stateIndicatorBoundEl.removeEventListener('click', toggleListening);
-  }
-  if (stateIndicatorBtn && stateIndicatorBoundEl !== stateIndicatorBtn) {
-    stateIndicatorBtn.addEventListener('click', toggleListening);
-  }
-  stateIndicatorBoundEl = stateIndicatorBtn;
 }
 
 function setVideoMirror(shouldMirror) {
@@ -1704,6 +1521,11 @@ function setListeningEnabled(enabled) {
 
 function toggleListening() {
   setListeningEnabled(!listeningEnabled);
+}
+
+// Status pill click handler — toggle listening on/off
+if (statusEl) {
+  statusEl.addEventListener('click', () => setListeningEnabled(!listeningEnabled));
 }
 
 async function ensureAudioCtx() {
