@@ -1609,12 +1609,6 @@ function addMessage(role, text, meta, isHtml = false) {
     div.appendChild(metaDiv);
   }
   messagesDiv.appendChild(div);
-  // Mirror to the other layout so messages are visible regardless of current layout
-  const other = messagesDiv.parentElement.classList.contains('pc-layout')
-    ? document.querySelector('.mobile-layout .transcript')
-    : document.querySelector('.pc-layout .transcript');
-  if (other) other.appendChild(div.cloneNode(true));
-  scrollMessagesToBottom(true);
   return div;
 }
 
