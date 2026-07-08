@@ -927,11 +927,11 @@ function drawWaveform() {
     const barH = Math.max(2, amplitude * (h - 4));
     const x = i * (barWidth + BAR_GAP);
     const y = (h - barH) / 2;
+    const r = Math.max(0, Math.min(barWidth / 2, barH / 2, 3));
 
     waveformCtx.globalAlpha = 0.3 + amplitude * 0.7;
     waveformCtx.beginPath();
-    const r = Math.min(barWidth / 2, barH / 2, 3);
-    waveformCtx.roundRect(x, y, barWidth, barH, r);
+    waveformCtx.roundRect(x, y, Math.max(0, barWidth), Math.max(0, barH), r);
     waveformCtx.fill();
   }
 
