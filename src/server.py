@@ -158,6 +158,14 @@ async def speak_sentence(
 async def root():
     return HTMLResponse(content=(Path(__file__).parent / "index.html").read_text(encoding="utf-8"))
 
+@app.get("/styles.css")
+async def styles_css():
+    return Response(content=(Path(__file__).parent / "styles.css").read_text(encoding="utf-8"), media_type="text/css")
+
+@app.get("/app.js")
+async def app_js():
+    return Response(content=(Path(__file__).parent / "app.js").read_text(encoding="utf-8"), media_type="application/javascript")
+
 
 @app.get("/api/tts/options")
 async def tts_options():
