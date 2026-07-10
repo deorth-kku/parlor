@@ -278,14 +278,16 @@ function updateStateUI() {
       listening: listeningEnabled ? 'Listening' : 'Listening Off',
       muted: 'Listening Off',
       processing: 'Processing',
-      speaking: 'Speaking'
+      speaking: 'Speaking',
+      disconnected: 'Disconnected'
     };
     const statusClasses = {
-      loading: '',
-      listening: listeningEnabled ? 'connected' : 'muted',
+      loading: 'loading',
+      listening: listeningEnabled ? 'listening' : 'muted',
       muted: 'muted',
       processing: 'processing',
-      speaking: 'speaking'
+      speaking: 'speaking',
+      disconnected: 'disconnected'
     };
     const label = statusLabels[displayedState] || displayedState;
     const cls = statusClasses[displayedState] || '';
@@ -304,6 +306,7 @@ function updateStateUI() {
     processing: ['#f59e0b', 'rgba(245,158,11,0.12)'],
     speaking: ['#818cf8', 'rgba(129,140,248,0.12)'],
     loading: ['#3a3d46', 'rgba(58,61,70,0.12)'],
+    disconnected: ['#f87171', 'rgba(248,113,113,0.12)'],
   };
   const [glow, glowDim] = stateVars[displayedState] || stateVars.loading;
   document.documentElement.style.setProperty('--glow', glow);
@@ -326,11 +329,10 @@ function updateStateUI() {
 function connect() {
   ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
   ws.onopen = () => {
-    setStatus('connected', 'Connected');
     if (state !== 'loading') setState('listening');
   };
   ws.onclose = () => {
-    setStatus('disconnected', 'Disconnected');
+    setState('disconnected');
     setTimeout(connect, 2000);
   };
   ws.onmessage = ({ data }) => {
@@ -396,7 +398,6 @@ function connect() {
       scrollMessagesToBottom(true);
       if (!streamPlaybackStarted && state === 'processing') {
         setState('listening');
-        setStatus('connected', 'Connected');
         activeTurnId = null;
       }
     } else if (msg.type === 'audio_start') {
@@ -428,15 +429,12 @@ function connect() {
       if (meta) meta.textContent += ` · TTS ${msg.tts_time}s`;
       if (!streamPlaybackStarted && state !== 'listening') {
         setState('listening');
-        setStatus('connected', 'Connected');
       }
       interruptedTurnId = null;
       activeTurnId = null;
     }
   };
 }
-
-function setStatus(cls, text) { statusEl.className = `status-pill ${cls}`; statusEl.textContent = text; }
 
 // ── Video Source Switching ──
 const VIDEO_SOURCE_STORAGE_KEY = 'parlor-video-source';
@@ -745,7 +743,6 @@ function handleSpeechEnd(audio) {
   const imageBase64 = captureFrame();
 
   setState('processing');
-  setStatus('processing', 'Processing');
   addMessage('user', '<span class="loading-dots"><span></span><span></span><span></span></span>', imageBase64 ? 'with camera' : '', true);
 
   const payload = { audio: wavBase64, tts_language: selectedLanguage, tts_voice: selectedVoice };
@@ -866,7 +863,6 @@ function queueAudioChunk(base64Pcm) {
     streamPlaybackStarted = true;
     speakingStartedAt = Date.now();
     setState('speaking');
-    setStatus('speaking', 'Speaking');
   }
   source.start(startAt);
   streamNextTime = startAt + audioBuffer.duration;
@@ -883,7 +879,6 @@ function queueAudioChunk(base64Pcm) {
     syncStreamPlaybackState();
     if (streamSources.length === 0 && state === 'speaking') {
       setState('listening');
-      setStatus('connected', 'Connected');
     }
   };
 }

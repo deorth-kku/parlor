@@ -137,8 +137,10 @@
     background: var(--c-text-dim);
     transition: background 0.3s;
   }
-  .status-pill.connected { color: var(--c-listen); background: var(--c-listen-dim); }
-  .status-pill.connected::before { background: var(--c-listen); }
+  .status-pill.listening { color: var(--c-listen); background: var(--c-listen-dim); }
+  .status-pill.listening::before { background: var(--c-listen); }
+  .status-pill.loading { color: var(--c-loading); background: var(--c-loading-dim); }
+  .status-pill.loading::before { background: var(--c-loading); }
   .status-pill.disconnected { color: #f87171; background: rgba(248,113,113,0.1); }
   .status-pill.disconnected::before { background: #f87171; }
   .status-pill.processing { color: var(--c-process); background: var(--c-process-dim); }
