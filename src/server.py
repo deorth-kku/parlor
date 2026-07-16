@@ -156,15 +156,21 @@ async def speak_sentence(
 
 @app.get("/")
 async def root():
-    return HTMLResponse(content=(Path(__file__).parent / "index.html").read_text(encoding="utf-8"))
+    return HTMLResponse(content=(Path(__file__).parent.parent / "public" / "index.html").read_text(encoding="utf-8"))
 
 @app.get("/styles.css")
 async def styles_css():
-    return Response(content=(Path(__file__).parent / "styles.css").read_text(encoding="utf-8"), media_type="text/css")
+    return Response(content=(Path(__file__).parent.parent / "public" / "styles.css").read_text(encoding="utf-8"), media_type="text/css")
 
 @app.get("/app.js")
 async def app_js():
-    return Response(content=(Path(__file__).parent / "app.js").read_text(encoding="utf-8"), media_type="application/javascript")
+    return Response(content=(Path(__file__).parent.parent / "public" / "app.js").read_text(encoding="utf-8"), media_type="application/javascript")
+
+
+@app.get("/favicon.png")
+async def favicon():
+    favicon_path = Path(__file__).parent.parent / "public" / "favicon.png"
+    return Response(content=favicon_path.read_bytes(), media_type="image/png")
 
 
 @app.get("/api/tts/options")
