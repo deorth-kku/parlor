@@ -148,6 +148,30 @@
   .status-pill.disconnected::before { background: #f87171; }
   .status-pill.processing { color: var(--c-process); background: var(--c-process-dim); }
   .status-pill.processing::before { background: var(--c-process); }
+
+  /* PROCESSING pill doubles as a "Stop" button on hover (keeps its dot) */
+  .status-pill.stoppable {
+    cursor: pointer;
+    font-weight: 700;
+  }
+  .status-pill .label-action {
+    display: none;
+    margin-left: 4px;
+    opacity: 0.9;
+  }
+  .status-pill.stoppable:hover .label-base {
+    display: none;
+  }
+  .status-pill.stoppable:hover .label-action {
+    display: inline;
+  }
+  .status-pill.stoppable:hover {
+    background: rgba(245,158,11,0.22);
+    color: #fbbf24;
+  }
+  .status-pill.stoppable:active {
+    transform: scale(0.96);
+  }
   .status-pill.speaking { color: #818cf8; background: rgba(129,140,248,0.12); }
   .status-pill.speaking::before { background: #818cf8; }
   .status-pill.muted { color: #f87171; background: rgba(248,113,113,0.1); }

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 
@@ -374,6 +374,7 @@ class OpenAICompatibleBackend:
         history: list[dict[str, Any]],
         *,
         user_content: str | list[dict[str, Any]],
+        should_continue: "Callable[[], bool] | None" = None,
     ):
         payload: dict[str, Any] = {
             "messages": [*history, {"role": "user", "content": user_content}],
@@ -398,7 +399,14 @@ class OpenAICompatibleBackend:
             last_transcription_text = ""
             last_finalized_response_count = 0
 
+            # Allow the caller to abort the in-flight HTTP stream (e.g. user interrupt).
+            continue_func = should_continue if should_continue is not None else (lambda: True)
+
             async for line in lines:
+                if not continue_func():
+                    # Abort: stop iterating so the enclosing `async with`
+                    # httpx stream context is exited and the request cancelled.
+                    break
                 if not line.startswith("data: "):
                     continue
                 data = line[6:]

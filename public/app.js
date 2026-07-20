@@ -252,6 +252,10 @@ function updateStateUI() {
       speaking: 'Speaking',
       disconnected: 'Disconnected'
     };
+    // Action word shown only on hover (stop an in-flight turn).
+    const statusActions = {
+      processing: 'Stop',
+    };
     const statusClasses = {
       loading: 'loading',
       listening: listeningEnabled ? 'listening' : 'muted',
@@ -261,9 +265,13 @@ function updateStateUI() {
       disconnected: 'disconnected'
     };
     const label = statusLabels[displayedState] || displayedState;
+    const action = statusActions[displayedState];
     const cls = statusClasses[displayedState] || '';
-    statusEl.textContent = label;
     statusEl.className = `status-pill ${cls}`;
+    if (displayedState === 'processing') statusEl.classList.add('stoppable');
+    statusEl.innerHTML =
+      `<span class="label-base">${label}</span>` +
+      (action ? `<span class="label-action">${action}</span>` : '');
   }
 
   if (state !== 'speaking') {
@@ -371,6 +379,30 @@ function connect() {
         setState('listening');
         activeTurnId = null;
       }
+    } else if (msg.type === 'turn_interrupted') {
+      if (msg.turn_id && activeTurnId && msg.turn_id !== activeTurnId) return;
+      // Finalize any half-rendered assistant bubble so it doesn't stay stuck
+      // on the ellipsis placeholder.
+      if (activeAssistantMsg) {
+        const meta = activeAssistantMsg.querySelector('.meta');
+        const textNode = activeAssistantMsg.childNodes[0];
+        const hasText = textNode && textNode.nodeType === Node.TEXT_NODE && textNode.textContent.trim();
+        if (!hasText) {
+          const fresh = document.createTextNode('—');
+          if (textNode) {
+            activeAssistantMsg.replaceChild(fresh, textNode);
+          } else {
+            activeAssistantMsg.insertBefore(fresh, meta || null);
+          }
+        }
+        if (meta) meta.textContent = 'Interrupted';
+      }
+      activeAssistantMsg = null;
+      interruptedTurnId = null;
+      ignoreIncomingAudio = false;
+      stopPlayback();
+      setState('listening');
+      activeTurnId = null;
     } else if (msg.type === 'audio_start') {
       if (msg.turn_id && activeTurnId && msg.turn_id !== activeTurnId) return;
       if (interruptedTurnId && msg.turn_id === interruptedTurnId) return;
@@ -383,10 +415,6 @@ function connect() {
       if (ignoreIncomingAudio) return;
       queueAudioChunk(msg.audio);
     } else if (msg.type === 'audio_end') {
-      if (interruptedTurnId && msg.turn_id === interruptedTurnId) {
-        interruptedTurnId = null;
-        return;
-      }
       if (msg.turn_id && activeTurnId && msg.turn_id !== activeTurnId) return;
       if (ignoreIncomingAudio) {
         ignoreIncomingAudio = false;
@@ -786,9 +814,28 @@ function toggleListening() {
   setListeningEnabled(!listeningEnabled);
 }
 
-// Status pill click handler — toggle listening on/off
+// Status pill click handler — stop an in-flight generation when processing,
+// otherwise toggle listening on/off.
 if (statusEl) {
-  statusEl.addEventListener('click', () => setListeningEnabled(!listeningEnabled));
+  statusEl.addEventListener('click', () => {
+    if (state === 'processing') {
+      requestInterrupt();
+    } else {
+      setListeningEnabled(!listeningEnabled);
+    }
+  });
+}
+
+function requestInterrupt() {
+  if (state !== 'processing' && state !== 'speaking') return;
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'interrupt' }));
+  }
+  interruptedTurnId = activeTurnId;
+  ignoreIncomingAudio = true;
+  stopPlayback();
+  setState('listening');
+  console.log('User interrupted backend generation');
 }
 
 async function ensureAudioCtx() {

@@ -455,7 +455,11 @@ async def websocket_endpoint(ws: WebSocket):
             history.append({"role": "user", "content": user_content})
 
             t0 = time.time()
-            stream = backend.stream_turn(history[:-1], user_content=user_content)
+            stream = backend.stream_turn(
+                history[:-1],
+                user_content=user_content,
+                should_continue=lambda: not interrupted.is_set(),
+            )
 
             assistant_text = ""
             assistant_transcription = ""
@@ -579,6 +583,18 @@ async def websocket_endpoint(ws: WebSocket):
 
             if interrupted.is_set():
                 print("Interrupted after LLM, skipping response")
+                history.append(
+                    {
+                        "role": "system",
+                        "content": "The user cancelled (interrupted) their previous query; no assistant response was generated for it.",
+                    }
+                )
+                try:
+                    await ws.send_text(
+                        json.dumps({"type": "turn_interrupted", "turn_id": turn_id})
+                    )
+                except Exception as exc:
+                    print(f"Failed to send turn_interrupted: {exc!r}")
                 continue
 
             history.append({"role": "assistant", "content": final_text})
