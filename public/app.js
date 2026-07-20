@@ -1,18 +1,17 @@
 function $$(id) {
-  const showPc = window.matchMedia('(min-width: 1024px)').matches;
-  const layout = showPc ? '.pc-layout' : '.mobile-layout';
-  const el = document.querySelector(`${layout} #${id}`);
-  if (el) return el;
   return document.getElementById(id);
 }
-let video, inputSourceSelect, languageSelect, voiceSelect, messagesDiv, statusEl;
+let video, inputSourceSelect, inputSourceSelectMobile, languageSelect, languageSelectMobile, voiceSelect, voiceSelectMobile, messagesDiv, statusEl;
 let viewportWrap, viewportGlow, waveformCanvas, waveformCtx, mirrorToggleBtn;
 let mirrorToggleBoundEl = null;
 function refreshElements() {
   video = $$('video');
   inputSourceSelect = $$('inputSourceSelect');
+  inputSourceSelectMobile = $$('inputSourceSelectMobile');
   languageSelect = $$('languageSelect');
+  languageSelectMobile = $$('languageSelectMobile');
   voiceSelect = $$('voiceSelect');
+  voiceSelectMobile = $$('voiceSelectMobile');
   messagesDiv = $$('messages');
   statusEl = $$('status');
   viewportWrap = $$('viewportWrap');
@@ -28,42 +27,6 @@ function refreshElements() {
   applyVideoLayout();
   updateMirrorToggleUI();
   updateStateUI();
-
-  // Re-render dropdowns into the newly active layout (options may have been
-  // rendered into the other layout's selects which are now hidden).
-  if (ttsOptions) {
-    renderLanguageOptions();
-    if (languageSelect.value) {
-      renderVoiceOptions(languageSelect.value, selectedVoice);
-    }
-  }
-
-  // Re-populate video device dropdowns in both layouts
-  if (videoDeviceLabels.size > 0) {
-    const allDevices = Array.from(videoDeviceLabels.entries()).map(([id, label]) => ({
-      deviceId: id,
-      label: label,
-      kind: 'videoinput'
-    }));
-    populateVideoSelect(allDevices);
-  }
-
-  // Sync message history between layouts so conversations remain visible
-  // regardless of which layout is currently shown.
-  syncMessagesBetweenLayouts();
-}
-
-function syncMessagesBetweenLayouts() {
-  const pcMsgs = document.querySelector('.pc-layout .transcript');
-  const mobileMsgs = document.querySelector('.mobile-layout .transcript');
-  if (!pcMsgs || !mobileMsgs) return;
-  const pcHas = pcMsgs.children.length > 0;
-  const mobileHas = mobileMsgs.children.length > 0;
-  if (pcHas && !mobileHas) {
-    mobileMsgs.innerHTML = pcMsgs.innerHTML;
-  } else if (mobileHas && !pcHas) {
-    pcMsgs.innerHTML = mobileMsgs.innerHTML;
-  }
 }
 
 let ws, mediaStream, myvad, audioStream;
@@ -152,27 +115,34 @@ function saveTtsSelection(languageCode, voice) {
 }
 
 function renderLanguageOptions() {
-  languageSelect.innerHTML = '';
-  for (const language of ttsOptions.languages) {
-    const option = document.createElement('option');
-    option.value = language.code;
-    option.textContent = `${language.label} (${language.code})`;
-    languageSelect.appendChild(option);
+  for (const select of [languageSelect, languageSelectMobile]) {
+    if (!select) continue;
+    select.innerHTML = '';
+    for (const language of ttsOptions.languages) {
+      const option = document.createElement('option');
+      option.value = language.code;
+      option.textContent = `${language.label} (${language.code})`;
+      select.appendChild(option);
+    }
   }
 }
 
 function renderVoiceOptions(languageCode, preferredVoice = null) {
   const language = ttsOptions.languages.find(item => item.code === languageCode) || ttsOptions.languages[0];
-  voiceSelect.innerHTML = '';
-  for (const voice of language.voices) {
-    const option = document.createElement('option');
-    option.value = voice;
-    option.textContent = voice;
-    voiceSelect.appendChild(option);
+  const chosen = language.voices.includes(preferredVoice) ? preferredVoice : language.default_voice;
+  for (const select of [voiceSelect, voiceSelectMobile]) {
+    if (!select) continue;
+    select.innerHTML = '';
+    for (const voice of language.voices) {
+      const option = document.createElement('option');
+      option.value = voice;
+      option.textContent = voice;
+      select.appendChild(option);
+    }
+    select.disabled = false;
+    select.value = chosen;
   }
-  voiceSelect.disabled = false;
-  voiceSelect.value = language.voices.includes(preferredVoice) ? preferredVoice : language.default_voice;
-  selectedVoice = voiceSelect.value;
+  selectedVoice = chosen;
 }
 
 function loadTtsSelection() {
@@ -187,6 +157,7 @@ function loadTtsSelection() {
 function setTtsSelection(languageCode, voice) {
   selectedLanguage = languageCode;
   languageSelect.value = languageCode;
+  languageSelectMobile.value = languageCode;
   renderVoiceOptions(languageCode, voice);
   saveTtsSelection(languageCode, voice);
 }
@@ -569,7 +540,7 @@ async function enumerateVideoDevices() {
 }
 
 function populateVideoSelect(videoInputs) {
-  const selects = document.querySelectorAll('select#inputSourceSelect');
+  const selects = [inputSourceSelect, inputSourceSelectMobile].filter(Boolean);
   for (const select of selects) {
     select.innerHTML = '';
     const offOpt = document.createElement('option');
@@ -914,28 +885,33 @@ function updateLatestUserMessage(text) {
     }
   }
   lastUserMsg.insertBefore(document.createTextNode(text), meta || null);
-
-  // Mirror to the other layout
-  const other = messagesDiv.parentElement.classList.contains('pc-layout')
-    ? document.querySelector('.mobile-layout .transcript')
-    : document.querySelector('.pc-layout .transcript');
-  if (other) {
-    const otherUserMsgs = other.querySelectorAll('.msg.user');
-    const otherLast = otherUserMsgs[otherUserMsgs.length - 1];
-    if (otherLast) {
-      const otherMeta = otherLast.querySelector('.meta');
-      for (const node of [...otherLast.childNodes]) {
-        if (node !== otherMeta) otherLast.removeChild(node);
-      }
-      otherLast.insertBefore(document.createTextNode(text), otherMeta || null);
-    }
-  }
   scrollMessagesToBottom();
 }
 
 inputSourceSelect.addEventListener('change', () => {
   switchVideoSource(inputSourceSelect.value);
 });
+
+if (inputSourceSelectMobile) {
+  inputSourceSelectMobile.addEventListener('change', () => {
+    switchVideoSource(inputSourceSelectMobile.value);
+  });
+}
+
+if (languageSelectMobile) {
+  languageSelectMobile.addEventListener('change', () => {
+    selectedLanguage = languageSelectMobile.value;
+    renderVoiceOptions(selectedLanguage);
+    saveTtsSelection(selectedLanguage, selectedVoice);
+  });
+}
+
+if (voiceSelectMobile) {
+  voiceSelectMobile.addEventListener('change', () => {
+    selectedVoice = voiceSelectMobile.value;
+    saveTtsSelection(selectedLanguage, selectedVoice);
+  });
+}
 
 // ── Init ──
 async function init() {

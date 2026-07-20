@@ -10,7 +10,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=Syne:wght@700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
 </head>
-<body>
+<body class="app-body">
 
 <header>
   <div class="logo">
@@ -21,8 +21,9 @@
   <div id="status" class="status-pill disconnected">Disconnected</div>
 </header>
 
-<!-- Desktop layout (PC only) -->
-<div class="pc-layout">
+<!-- Single responsive layout: sidebar is hidden on mobile,
+     controls move below the transcript instead. -->
+<main class="app-layout">
   <aside class="sidebar">
     <div class="side-section">
       <h3>Settings</h3>
@@ -59,46 +60,29 @@
       </div>
       <div id="messages" class="transcript"></div>
     </div>
-  </div>
 
-  <aside class="sidebar">
-  </aside>
-</div>
-
-<!-- Mobile layout (default) -->
-<div class="mobile-layout">
-  <div class="portal-stack">
-    <!-- Webcam viewport with glow layers -->
-    <div id="viewportWrap" class="viewport-wrap loading">
-      <div class="viewport-glow"></div>
-      <video id="video" autoplay muted playsinline></video>
-      <button id="mirrorToggle" class="mirror-toggle" type="button" hidden>
-        <span class="label">Mirror</span>
-        <span class="state">On</span>
-      </button>
-    </div>
-    
-    <!-- Audio waveform visualizer -->
-    <div class="waveform-wrap">
-      <canvas id="waveform"></canvas>
-    </div>
-    <div id="messages" class="transcript"></div>
+    <!-- Controls shown below the transcript on mobile only -->
     <div class="controls">
       <div class="side-selector">
         <label for="languageSelect">Language</label>
-        <select id="languageSelect"></select>
+        <select id="languageSelectMobile"></select>
       </div>
       <div class="side-selector">
         <label for="voiceSelect">Voice</label>
-        <select id="voiceSelect" disabled></select>
+        <select id="voiceSelectMobile" disabled></select>
       </div>
       <div class="side-selector">
         <label for="inputSourceSelect">Video</label>
-        <select id="inputSourceSelect"></select>
+        <select id="inputSourceSelectMobile"></select>
       </div>
     </div>
   </div>
-</div>
+
+  <aside class="sidebar sidebar-right">
+    <!-- Reserved space for future content -->
+  </aside>
+  </div>
+</main>
 
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.29/dist/bundle.min.js"></script>

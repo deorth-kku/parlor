@@ -153,9 +153,9 @@
   .status-pill.muted { color: #f87171; background: rgba(248,113,113,0.1); }
   .status-pill.muted::before { background: #f87171; }
 
-  /* ── Main layout (PC only, hidden on mobile) ── */
-  .pc-layout {
-    display: none;
+  /* ── Main layout: row on desktop, column on mobile ── */
+  .app-layout {
+    display: flex;
     flex: 1;
     width: 100%;
     max-width: 1400px;
@@ -524,67 +524,43 @@
     30% { opacity: 1; transform: translateY(-4px); }
   }
 
-  /* ── Mobile layout (default) ── */
-  .mobile-layout {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    flex: 1;
-    width: 100%;
-    max-width: 720px;
-    padding: 16px 8px 16px;
-    gap: 0;
-    z-index: 2;
-    min-height: 0;
-  }
-
-  .mobile-layout .portal-stack {
-    width: 100%;
-    max-width: 640px;
-  }
-
-  .mobile-layout .controls {
+  /* ── Bottom controls (mobile only) ── */
+  .controls {
+    display: none;
     width: 100%;
     max-width: 640px;
     padding: 12px 4px 4px;
-    display: flex;
-    align-items: flex-end;
-    gap: 8px;
     flex-shrink: 0;
     z-index: 2;
   }
 
-  .mobile-layout .controls .side-selector {
+  .controls .side-selector {
     flex: 1 1 0;
     min-width: 0;
     margin-bottom: 0;
   }
 
-  .mobile-layout .ctrl-btn {
-    font-family: var(--font-body);
-    font-size: 12px;
-    font-weight: 600;
-    padding: 8px 16px;
-    border: 1px solid rgba(255,255,255,0.06);
-    border-radius: 10px;
-    background: var(--c-surface);
-    color: var(--c-text-dim);
-    cursor: pointer;
-    transition: all 0.2s;
-    letter-spacing: 0.02em;
-    width: auto;
-    text-align: center;
-  }
-
-  .mobile-layout .ctrl-btn:hover { background: var(--c-surface-hover); color: var(--c-text); }
-  .mobile-layout .ctrl-btn.active {
-    background: var(--c-listen-dim);
-    color: var(--c-listen);
-    border-color: rgba(74,222,128,0.15);
-  }
-
   /* ── Responsive ── */
-  @media (min-width: 1024px) {
-    .pc-layout { display: flex; }
-    .mobile-layout { display: none; }
+  @media (max-width: 1023px) {
+    .app-layout {
+      flex-direction: column;
+      align-items: center;
+      padding: 0 8px 16px;
+      gap: 0;
+    }
+
+    .sidebar { display: none; }
+
+    .center-col {
+      width: 100%;
+      max-width: 720px;
+    }
+
+    .portal-stack { width: 100%; max-width: 640px; }
+
+    .controls {
+      display: flex;
+      align-items: flex-end;
+      gap: 8px;
+    }
   }
