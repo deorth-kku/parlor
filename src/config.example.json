@@ -9,5 +9,20 @@
     "timeout": 120.0,
     "temperature": 0.2,
     "max_tokens": 4096
+  },
+  "tts": {
+    "base_url": "http://127.0.0.1:9931",
+    "model": "",
+    "languages": [
+      { "code": "en", "label": "English" },
+      { "code": "zh", "label": "Chinese" }
+    ],
+    "default_language": "en",
+    "default_voice": "default",
+    "voices": {
+      "default": "voices/default.wav"
+    },
+    "timeout": 120.0,
+    "params": {}
   }
 }

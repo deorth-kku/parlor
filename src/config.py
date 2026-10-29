@@ -4,9 +4,7 @@ The application reads its settings from a nested JSON file (``config.json``)
 instead of environment variables. Built-in defaults live in :data:`DEFAULTS`
 so the app keeps working when the file — or individual keys — are missing.
 
-Only settings that this project defines directly are modelled here. Variables
-introduced by third-party dependencies (e.g. ONNX Runtime / TTS provider
-options) are intentionally left out of this file.
+Only settings that this project defines directly are modelled here.
 """
 
 from __future__ import annotations
@@ -30,6 +28,16 @@ DEFAULTS: dict[str, Any] = {
         "timeout": 120.0,
         "temperature": 0.2,
         "max_tokens": 4096,
+    },
+    "tts": {
+        "base_url": "http://127.0.0.1:9931",
+        "model": "",
+        "languages": [],
+        "default_language": "en",
+        "default_voice": "",
+        "voices": {},
+        "timeout": 120.0,
+        "params": {},
     },
 }
 

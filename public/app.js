@@ -128,12 +128,12 @@ function renderLanguageOptions() {
 }
 
 function renderVoiceOptions(languageCode, preferredVoice = null) {
-  const language = ttsOptions.languages.find(item => item.code === languageCode) || ttsOptions.languages[0];
-  const chosen = language.voices.includes(preferredVoice) ? preferredVoice : language.default_voice;
+  const voices = ttsOptions.voices || [];
+  const chosen = voices.includes(preferredVoice) ? preferredVoice : (ttsOptions.default_voice || voices[0] || '');
   for (const select of [voiceSelect, voiceSelectMobile]) {
     if (!select) continue;
     select.innerHTML = '';
-    for (const voice of language.voices) {
+    for (const voice of voices) {
       const option = document.createElement('option');
       option.value = voice;
       option.textContent = voice;
@@ -315,6 +315,15 @@ function connect() {
     setTimeout(connect, 2000);
   };
   ws.onmessage = ({ data }) => {
+    if (typeof data !== 'string') {
+      // Binary frame: a raw float32 PCM audio chunk.
+      if (ignoreIncomingAudio) return;
+      data.arrayBuffer().then(buf => {
+        if (ignoreIncomingAudio) return;
+        queueAudioChunk(buf);
+      });
+      return;
+    }
     const msg = JSON.parse(data);
     if (msg.type === 'text') {
       if (msg.transcription) {
@@ -409,11 +418,6 @@ function connect() {
       if (ignoreIncomingAudio) return;
       streamSampleRate = msg.sample_rate || 24000;
       startStreamPlayback();
-    } else if (msg.type === 'audio_chunk') {
-      if (msg.turn_id && activeTurnId && msg.turn_id !== activeTurnId) return;
-      if (interruptedTurnId && msg.turn_id === interruptedTurnId) return;
-      if (ignoreIncomingAudio) return;
-      queueAudioChunk(msg.audio);
     } else if (msg.type === 'audio_end') {
       if (msg.turn_id && activeTurnId && msg.turn_id !== activeTurnId) return;
       if (ignoreIncomingAudio) {
@@ -858,15 +862,11 @@ function startStreamPlayback() {
   streamNextTime = audioCtx.currentTime + 0.05;
 }
 
-function queueAudioChunk(base64Pcm) {
+function queueAudioChunk(pcmBuffer) {
   ensureAudioCtx();
 
-  const bin = atob(base64Pcm);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  const int16 = new Int16Array(bytes.buffer);
-  const float32 = new Float32Array(int16.length);
-  for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768;
+  // pcmBuffer is an ArrayBuffer of raw float32 little-endian mono samples.
+  const float32 = new Float32Array(pcmBuffer);
 
   const audioBuffer = audioCtx.createBuffer(1, float32.length, streamSampleRate);
   audioBuffer.getChannelData(0).set(float32);

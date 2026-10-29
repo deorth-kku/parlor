@@ -4,27 +4,21 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import base64
-import io
 import json
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Callable
 
-import numpy as np
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse, Response
-from pydantic import BaseModel
+from fastapi.responses import HTMLResponse, Response
 
 from config import DEFAULT_CONFIG_PATH, config, reload as reload_config
-import tts
 from openai_backend import OpenAICompatibleBackend, response_text_from_value
-from voices_catalog import VOICE_CATALOG
+from tts_remote import RemoteTTS
 from tts_prompt import build_language_instruction
-from voices_data import LANGUAGES
 load_dotenv()
 
 SYSTEM_PROMPT = (
@@ -37,35 +31,38 @@ SYSTEM_PROMPT = (
 )
 
 backend: OpenAICompatibleBackend | None = None
-tts_backend = None
+tts_remote: RemoteTTS | None = None
 
 
 def get_tts_defaults() -> dict[str, str]:
-    language = VOICE_CATALOG.default_language
+    if tts_remote is None:
+        return {"tts_language": "en", "tts_voice": ""}
     return {
-        "tts_language": language,
-        "tts_voice": VOICE_CATALOG.default_voices[language],
+        "tts_language": tts_remote.default_language,
+        "tts_voice": tts_remote.default_voice,
     }
 
 
 def resolve_tts_selection(msg: dict[str, object]) -> tuple[str, str]:
     defaults = get_tts_defaults()
     language = str(msg.get("tts_language") or defaults["tts_language"])
-    if language not in VOICE_CATALOG.languages:
+    valid_languages = {item["code"] for item in tts_remote.languages()} if tts_remote else set()
+    if language not in valid_languages:
         language = defaults["tts_language"]
-    voice = str(msg.get("tts_voice") or VOICE_CATALOG.languages[language]["default_voice"])
-    valid_voices = VOICE_CATALOG.languages[language]["voices"]
+    voice = str(msg.get("tts_voice") or defaults["tts_voice"])
+    valid_voices = set(tts_remote.voice_names()) if tts_remote else set()
     if voice not in valid_voices:
-        voice = str(VOICE_CATALOG.languages[language]["default_voice"])
+        voice = defaults["tts_voice"]
     return language, voice
 
 
 async def load_models():
-    global backend, tts_backend
-    loop = asyncio.get_event_loop()
+    global backend, tts_remote
     backend = OpenAICompatibleBackend.from_config(config)
     print(f"OpenAI-compatible backend loaded: {backend._config.base_url} model={backend._config.model}")
-    tts_backend = await loop.run_in_executor(None, tts.load)
+    tts_remote = RemoteTTS(config)
+    tts_remote.validate()
+    print(f"Remote TTS loaded: {tts_remote.base_url}")
 
 
 @asynccontextmanager
@@ -76,6 +73,8 @@ async def lifespan(app):
     finally:
         if backend is not None:
             await backend.aclose()
+        if tts_remote is not None:
+            await tts_remote.aclose()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -134,24 +133,22 @@ async def speak_sentence(
     voice: str,
     turn_id: str,
     should_send: Callable[[], bool],
+    on_sample_rate: Callable[[int], Any],
 ) -> bool:
-    pcm = await asyncio.get_event_loop().run_in_executor(
-        None,
-        lambda s=sentence, lang=language, selected_voice=voice: tts_backend.generate(s, lang, selected_voice),
-    )
-    if not should_send():
+    """Stream one sentence's PCM from the remote TTS server to the client.
+
+    Raw float32 PCM is forwarded as binary WebSocket frames. The remote's
+    sample rate (reported on the first chunk) is surfaced via ``on_sample_rate``
+    so the caller can emit ``audio_start``.
+    """
+    if tts_remote is None:
         return False
-    pcm_int16 = (pcm * 32767).clip(-32768, 32767).astype(np.int16)
-    await ws.send_text(
-        json.dumps(
-            {
-                "type": "audio_chunk",
-                "audio": base64.b64encode(pcm_int16.tobytes()).decode(),
-                "index": index,
-                "turn_id": turn_id,
-            }
-        )
-    )
+    async for sample_rate, chunk in tts_remote.stream_pcm(sentence, language, voice):
+        if not should_send():
+            return False
+        if sample_rate is not None:
+            await on_sample_rate(sample_rate)
+        await ws.send_bytes(chunk)
     return True
 
 
@@ -176,18 +173,13 @@ async def favicon():
 
 @app.get("/api/tts/options")
 async def tts_options():
+    if tts_remote is None:
+        return {"languages": [], "voices": [], "default_language": "en", "default_voice": ""}
     return {
-        "languages": [
-            {
-                "code": code,
-                "label": data["label"],
-                "voices": data["voices"],
-                "default_voice": data["default_voice"],
-            }
-            for code, data in VOICE_CATALOG.languages.items()
-        ],
-        "default_language": VOICE_CATALOG.default_language,
-        "default_voice": VOICE_CATALOG.default_voices[VOICE_CATALOG.default_language],
+        "languages": tts_remote.languages(),
+        "voices": tts_remote.voice_names(),
+        "default_language": tts_remote.default_language,
+        "default_voice": tts_remote.default_voice,
     }
 
 
@@ -199,217 +191,6 @@ async def model_info():
         return {"model": backend._config.model}
     resolved = await backend.resolve_model()
     return {"model": resolved or "auto"}
-
-
-# ── OpenAI-compatible TTS endpoints ──────────────────────────────────
-
-_TTS_MODELS = [
-    {"id": "kokoro", "object": "model", "created": 1687584915, "owned_by": "hexgrad"},
-]
-
-_AUDIO_FORMATS = {
-    "mp3": {"container": "mp3", "codec": "mp3", "media_type": "audio/mpeg", "extension": "mp3"},
-    "wav": {"container": None, "codec": None, "media_type": "audio/wav", "extension": "wav"},
-    "opus": {"container": "ogg", "codec": "libopus", "media_type": "audio/ogg; codecs=opus", "extension": "opus"},
-    "flac": {"container": "flac", "codec": "flac", "media_type": "audio/flac", "extension": "flac"},
-    "pcm": {"container": None, "codec": None, "media_type": "application/octet-stream", "extension": "pcm"},
-    "aac": {"container": "adts", "codec": "aac", "media_type": "audio/aac", "extension": "aac"},
-}
-
-_SUPPORTED_FORMATS = tuple(_AUDIO_FORMATS)
-
-
-def _detect_language(text: str) -> str:
-    """Detect language from text content: ja, zh, or en."""
-    has_kana = any(0x3040 <= ord(ch) <= 0x30FF for ch in text)
-    has_cjk = any(0x4E00 <= ord(ch) <= 0x9FFF for ch in text)
-    if has_kana:
-        return "ja"
-    if has_cjk:
-        return "zh"
-    return "en"
-
-
-class TTSRequest(BaseModel):
-    model: str = "kokoro"
-    input: str
-    voice: str | None = None
-    response_format: str = "mp3"
-    speed: float = 1.0
-
-
-def _write_wav(pcm: np.ndarray, sr: int) -> bytes:
-    """Encode PCM float32 to a proper WAV file."""
-    pcm_int16 = (pcm * 32767).clip(-32768, 32767).astype(np.int16)
-    data = pcm_int16.tobytes()
-    import struct
-    buf = io.BytesIO()
-    buf.write(b"RIFF")
-    buf.write(struct.pack("<I", 36 + len(data)))
-    buf.write(b"WAVE")
-    buf.write(b"fmt ")
-    buf.write(struct.pack("<I", 16))  # fmt chunk size
-    buf.write(struct.pack("<H", 1))   # PCM
-    buf.write(struct.pack("<H", 1))   # mono
-    buf.write(struct.pack("<I", sr))  # sample rate
-    buf.write(struct.pack("<I", sr * 2))  # byte rate
-    buf.write(struct.pack("<H", 2))   # block align
-    buf.write(struct.pack("<H", 16))  # bits per sample
-    buf.write(b"data")
-    buf.write(struct.pack("<I", len(data)))
-    buf.write(data)
-    return buf.getvalue()
-
-
-async def _encode_audio(pcm: np.ndarray, fmt: str, sr: int) -> bytes:
-    """Encode PCM float32 [-1,1] to the requested format."""
-    fmt = fmt.lower()
-    pcm = np.asarray(pcm, dtype=np.float32).reshape(-1)
-    if fmt not in _AUDIO_FORMATS:
-        raise ValueError(f"Unsupported audio format: {fmt}")
-    if fmt in {"wav", "pcm"}:
-        if fmt == "wav":
-            return _write_wav(pcm, sr)
-        pcm_int16 = (pcm * 32767).clip(-32768, 32767).astype(np.int16)
-        return pcm_int16.tobytes()
-    return _encode_audio_with_pyav(pcm, fmt, sr)
-
-
-def _encode_audio_with_pyav(pcm: np.ndarray, fmt: str, sr: int) -> bytes:
-    fmt_config = _AUDIO_FORMATS[fmt]
-    import av
-
-    arr = (pcm * 32767).clip(-32768, 32767).astype(np.int16)
-    out = io.BytesIO()
-    with av.open(out, mode="w", format=fmt_config["container"]) as out_ctx:
-        stream = out_ctx.add_stream(fmt_config["codec"], rate=sr)
-        stream.layout = "mono"
-        chunk_size = stream.frame_size or 1024
-        for i in range(0, len(arr), chunk_size):
-            chunk = arr[i : i + chunk_size]
-            if len(chunk) == 0:
-                break
-            frame = av.AudioFrame.from_ndarray(
-                chunk.reshape(1, -1), layout="mono", format="s16"
-            )
-            frame.sample_rate = sr
-            for packet in stream.encode(frame):
-                out_ctx.mux(packet)
-        for packet in stream.encode(None):
-            out_ctx.mux(packet)
-    return out.getvalue()
-
-
-def _error_response(message: str, error_type: str, param: str | None, status_code: int) -> JSONResponse:
-    return JSONResponse(
-        status_code=status_code,
-        content={"error": {"message": message, "type": error_type, "param": param, "code": status_code}},
-    )
-
-
-
-@app.get("/v1/audio/models")
-async def tts_model_list():
-    return {"object": "list", "data": _TTS_MODELS}
-
-
-@app.post("/v1/audio/speech")
-async def tts_speech(req: TTSRequest):
-    if tts_backend is None:
-        return _error_response("TTS backend not loaded", "server_error", None, 500)
-
-    response_format = req.response_format.lower()
-    if response_format not in _SUPPORTED_FORMATS:
-        error_msg = f"Invalid response format: '{req.response_format}'. Supported formats: {', '.join(_SUPPORTED_FORMATS)}"
-        print(f"[TTS 400] {error_msg}")
-        return _error_response(
-            error_msg,
-            "invalid_request_error",
-            "response_format",
-            400,
-        )
-
-    try:
-        # ── Step 1: Detect language from input text ──
-        language = _detect_language(req.input)
-        print(f"[TTS] input_len={len(req.input)}, language={language}, voice={req.voice}, format={response_format}, speed={req.speed}")
-
-        # ── Step 2: Resolve voice selection ──
-        # If client provides a voice, use it directly (or pick from + blend if multiple).
-        # Otherwise, fall back to the default voice for the detected language.
-        if req.voice:
-            voices = req.voice.split("+")
-            if len(voices) == 1:
-                voice = voices[0]
-            else:
-                # For blended voices, pick the first valid one from the catalog
-                voice = resolve_tts_selection({"tts_language": language})[1]
-                aval = LANGUAGES.get(language, [])['voices']
-                for vo in voices:
-                    if vo in aval:
-                        voice = vo
-                        break
-                print(f"[TTS] raw:{voices}, selected:{voice}")
-        else:
-            voice = resolve_tts_selection({"tts_language": language})[1]
-
-        # ── Step 3: Validate voice exists in catalog ──
-        # This is a hard error — invalid voice means client misconfiguration.
-        if voice not in VOICE_CATALOG.languages.get(language, {}).get("voices", []):
-            available = VOICE_CATALOG.languages.get(language, {}).get("voices", [])
-            error_msg = (
-                f"Voice '{voice}' not found for language '{language}'. "
-                f"Available voices: {', '.join(available[:10])}{'...' if len(available) > 10 else ''}"
-            )
-            print(f"[TTS 400] {error_msg}")
-            return _error_response(
-                error_msg,
-                "invalid_request_error",
-                "voice",
-                400,
-            )
-
-        # ── Step 4: Generate audio ──
-        # ValueError (e.g. text too short, no phonemes) → return 1s silence + warning log.
-        # Other exceptions → return 500 with full traceback.
-        try:
-            pcm = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: tts_backend.generate(req.input, language, voice, speed=req.speed),
-            )
-        except ValueError as exc:
-            # Graceful degradation: text is un-speakable (too short, no phonemes, etc.)
-            # Return a short silence clip instead of failing the request.
-            warning_msg = (
-                f"TTS skipped: {exc} "
-                f"(text='{req.input[:100]}', language={language}, voice={voice}, speed={req.speed})"
-            )
-            print(f"[TTS WARN] {warning_msg}")
-            pcm = np.zeros(tts_backend.sample_rate / 10, dtype=np.float32)  # 0.1 second of silence
-        except Exception as exc:
-            import traceback
-            error_msg = (
-                f"TTS generate failed: {type(exc).__name__}: {exc} "
-                f"(text='{req.input[:100]}', language={language}, voice={voice}, speed={req.speed})"
-            )
-            print(f"[TTS 500] {error_msg}")
-            print(traceback.format_exc())
-            return _error_response(error_msg, "server_error", None, 500)
-
-        # ── Step 5: Encode and return audio ──
-        audio_bytes = await _encode_audio(pcm, response_format, tts_backend.sample_rate)
-        format_config = _AUDIO_FORMATS[response_format]
-        return Response(
-            content=audio_bytes,
-            media_type=format_config["media_type"],
-            headers={"Content-Disposition": f'attachment; filename="speech.{format_config["extension"]}"'}
-        )
-    except Exception as exc:
-        import traceback
-        error_msg = f"Unexpected error: {type(exc).__name__}: {exc}"
-        print(f"[TTS 500] {error_msg}")
-        print(traceback.format_exc())
-        return _error_response(error_msg, "server_error", None, 500)
 
 
 @app.websocket("/ws")
@@ -482,6 +263,20 @@ async def websocket_endpoint(ws: WebSocket):
                     if sentence:
                         await sentence_queue.put(sentence)
 
+            async def on_sample_rate(sample_rate: int) -> None:
+                nonlocal tts_started
+                if not tts_started:
+                    tts_started = True
+                    await ws.send_text(
+                        json.dumps(
+                            {
+                                "type": "audio_start",
+                                "sample_rate": sample_rate,
+                                "turn_id": turn_id,
+                            }
+                        )
+                    )
+
             async def tts_worker() -> None:
                 nonlocal sentence_index, tts_started
                 while True:
@@ -490,18 +285,7 @@ async def websocket_endpoint(ws: WebSocket):
                         break
                     if not is_turn_active():
                         continue
-                    if not tts_started:
-                        tts_started = True
-                        await ws.send_text(
-                            json.dumps(
-                                {
-                                    "type": "audio_start",
-                                    "sample_rate": tts_backend.sample_rate,
-                                    "sentence_count": 0,
-                                    "turn_id": turn_id,
-                                }
-                            )
-                        )
+
                     sent = await speak_sentence(
                         ws,
                         sentence,
@@ -510,6 +294,7 @@ async def websocket_endpoint(ws: WebSocket):
                         tts_voice,
                         turn_id,
                         is_turn_active,
+                        on_sample_rate,
                     )
                     if not sent:
                         break
