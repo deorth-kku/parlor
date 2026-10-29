@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import base64
 import io
 import json
-import os
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -19,6 +19,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel
 
+from config import DEFAULT_CONFIG_PATH, config, reload as reload_config
 import tts
 from openai_backend import OpenAICompatibleBackend, response_text_from_value
 from voices_catalog import VOICE_CATALOG
@@ -62,7 +63,7 @@ def resolve_tts_selection(msg: dict[str, object]) -> tuple[str, str]:
 async def load_models():
     global backend, tts_backend
     loop = asyncio.get_event_loop()
-    backend = await OpenAICompatibleBackend.from_env()
+    backend = OpenAICompatibleBackend.from_config(config)
     print(f"OpenAI-compatible backend loaded: {backend._config.base_url} model={backend._config.model}")
     tts_backend = await loop.run_in_executor(None, tts.load)
 
@@ -645,5 +646,14 @@ async def websocket_endpoint(ws: WebSocket):
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", "8000"))
+    parser = argparse.ArgumentParser(description="Parlor real-time multimodal AI server")
+    parser.add_argument(
+        "--config",
+        "-c",
+        default=str(DEFAULT_CONFIG_PATH),
+        help=f"Path to the JSON config file (default: {DEFAULT_CONFIG_PATH})",
+    )
+    args = parser.parse_args()
+    reload_config(args.config)
+    port = int(config.get("server.port", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)

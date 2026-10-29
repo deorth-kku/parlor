@@ -8,6 +8,9 @@ wheels/
 *.egg-info
 vender/
 
+# Local configuration (may contain secrets such as the API key)
+config.json
+
 
 # Models (too large for git)
 *.onnx

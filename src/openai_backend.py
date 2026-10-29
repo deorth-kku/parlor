@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass
 from typing import Any, Callable
 
 import httpx
+
+from config import Config
 
 
 @dataclass(slots=True)
@@ -18,16 +19,6 @@ class OpenAIBackendConfig:
     timeout: float
     temperature: float
     max_tokens: int | None
-
-
-def _env_float(name: str, default: float) -> float:
-    raw = os.environ.get(name, "").strip()
-    return float(raw) if raw else default
-
-
-def _env_int(name: str, default: int | None) -> int | None:
-    raw = os.environ.get(name, "").strip()
-    return int(raw) if raw else default
 
 
 def _extract_json_payload(text: str) -> dict[str, Any]:
@@ -313,13 +304,14 @@ class OpenAICompatibleBackend:
         return None
 
     @classmethod
-    async def from_env(cls) -> "OpenAICompatibleBackend":
-        base_url = os.environ.get("OPENAI_BASE_URL", "http://127.0.0.1:8080/v1")
-        api_key = os.environ.get("OPENAI_API_KEY", "").strip() or None
-        model = os.environ.get("OPENAI_MODEL", "").strip() or None
-        timeout = _env_float("OPENAI_TIMEOUT", 120.0)
-        temperature = _env_float("OPENAI_TEMPERATURE", 0.2) or None
-        max_tokens = _env_int("OPENAI_MAX_TOKENS", 4096)
+    def from_config(cls, config: Config) -> "OpenAICompatibleBackend":
+        base_url = str(config.get("openai.base_url", "http://127.0.0.1:8080/v1")).strip()
+        api_key = str(config.get("openai.api_key", "")).strip() or None
+        model = str(config.get("openai.model", "")).strip() or None
+        timeout = float(config.get("openai.timeout", 120.0))
+        temperature_raw = config.get("openai.temperature", 0.2)
+        temperature = float(temperature_raw) if temperature_raw else None
+        max_tokens = int(config.get("openai.max_tokens", 4096))
 
         return cls(
             OpenAIBackendConfig(

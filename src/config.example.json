@@ -1,0 +1,13 @@
+{
+  "server": {
+    "port": 8000
+  },
+  "openai": {
+    "base_url": "http://127.0.0.1:8080/v1",
+    "api_key": "",
+    "model": "",
+    "timeout": 120.0,
+    "temperature": 0.2,
+    "max_tokens": 4096
+  }
+}

@@ -43,15 +43,27 @@ Open `http://localhost:8000`, grant camera and microphone access, and start talk
 
 ## Configuration
 
-| Variable | Default | Description |
+Settings are read from a nested JSON config file (default: `src/config.json`).
+Copy `src/config.example.json` to `src/config.json` and edit it. Point the
+server at a different file with the `--config` / `-c` flag:
+
+```bash
+uv run server.py --config /path/to/my-config.json
+```
+
+| Path | Default | Description |
 | --- | --- | --- |
-| `OPENAI_BASE_URL` | `http://127.0.0.1:8080/v1` | OpenAI-compatible API base URL |
-| `OPENAI_API_KEY` | empty | API key if your backend requires one |
-| `OPENAI_MODEL` | optional | Multimodal model name; omit to use the endpoint default |
-| `OPENAI_TIMEOUT` | `120` | Request timeout in seconds |
-| `OPENAI_TEMPERATURE` | `0.2` | Sampling temperature |
-| `OPENAI_MAX_TOKENS` | `256` | Max output tokens |
-| `PORT` | `8000` | Server port |
+| `server.port` | `8000` | Server port |
+| `openai.base_url` | `http://127.0.0.1:8080/v1` | OpenAI-compatible API base URL |
+| `openai.api_key` | empty | API key if your backend requires one |
+| `openai.model` | optional | Multimodal model name; omit to use the endpoint default |
+| `openai.timeout` | `120` | Request timeout in seconds |
+| `openai.temperature` | `0.2` | Sampling temperature |
+| `openai.max_tokens` | `4096` | Max output tokens |
+
+> TTS / ONNX Runtime options (e.g. `ONNX_PROVIDER`, `ORT_CUDA_*`) are still
+> read from environment variables and are intentionally not part of the JSON
+> config.
 
 ## Project structure
 
