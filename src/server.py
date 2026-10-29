@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
+import signal
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -16,6 +18,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, Response
 
 from config import DEFAULT_CONFIG_PATH, config, reload as reload_config
+from config_reload import ConfigManager
 from openai_backend import OpenAICompatibleBackend, response_text_from_value
 from tts_remote import RemoteTTS
 from tts_prompt import build_language_instruction
@@ -32,6 +35,9 @@ SYSTEM_PROMPT = (
 
 backend: OpenAICompatibleBackend | None = None
 tts_remote: RemoteTTS | None = None
+manager: ConfigManager | None = None
+config_path = DEFAULT_CONFIG_PATH
+_reload_task: asyncio.Task | None = None
 
 
 def get_tts_defaults() -> dict[str, str]:
@@ -63,14 +69,64 @@ async def load_models():
     tts_remote = RemoteTTS(config)
     tts_remote.validate()
     print(f"Remote TTS loaded: {tts_remote.base_url}")
+    if manager is not None:
+        manager.set_current(backend, tts_remote, config)
+
+
+def on_sighup() -> None:
+    """SIGHUP callback: hot-reload the config file (no restart needed)."""
+    global _reload_task
+    if manager is None:
+        return
+    print("SIGHUP received: reloading config")
+    _reload_task = asyncio.create_task(apply_reload())
+
+
+async def apply_reload() -> None:
+    """Reload the config and refresh every component that reads it.
+
+    The manager swaps in fresh backend/TTS clients; the module-level
+    globals (used by the WebSocket handlers) and the config singleton are
+    updated to point at the new ones.
+    """
+    global backend, tts_remote
+    result = await manager.apply()
+    if result.ok:
+        backend = manager.backend
+        tts_remote = manager.tts
+        if result.config is not None:
+            config.replace(result.config.data)
+        print(
+            f"Reloaded: backend={backend._config.base_url if backend else None} "
+            f"model={backend._config.model if backend else None} "
+            f"tts={tts_remote.base_url if tts_remote else None}"
+        )
+    else:
+        print(result.message)
 
 
 @asynccontextmanager
 async def lifespan(app):
+    global manager
+    manager = ConfigManager(config_path)
     await load_models()
+    await manager.start()
+    loop = asyncio.get_running_loop()
+    signal_installed = False
+    try:
+        loop.add_signal_handler(signal.SIGHUP, on_sighup)
+        signal_installed = True
+    except NotImplementedError:
+        # Platforms without loop signal support (e.g. Windows).
+        print("SIGHUP reload not supported on this platform")
     try:
         yield
     finally:
+        if signal_installed:
+            loop.remove_signal_handler(signal.SIGHUP)
+        if _reload_task is not None and not _reload_task.done():
+            await _reload_task
+        await manager.stop()
         if backend is not None:
             await backend.aclose()
         if tts_remote is not None:
@@ -439,6 +495,8 @@ if __name__ == "__main__":
         help=f"Path to the JSON config file (default: {DEFAULT_CONFIG_PATH})",
     )
     args = parser.parse_args()
+    config_path = Path(args.config)
     reload_config(args.config)
     port = int(config.get("server.port", 8000))
+    print(f"Send SIGHUP to {os.getpid()} to reload the config file")
     uvicorn.run(app, host="0.0.0.0", port=port)
