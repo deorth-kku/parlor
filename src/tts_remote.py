@@ -47,6 +47,15 @@ class RemoteTTS:
         self._ref_cache: dict[str, str] = {}
         self._client = httpx.AsyncClient(timeout=self._timeout)
 
+    def freeze_config(self) -> None:
+        """Snapshot the current config data.
+
+        After a hot reload replaces the shared ``Config`` singleton's data in
+        place, retired clients keep reading their pre-reload values (e.g.
+        languages and defaults) instead of mixing new and old config.
+        """
+        self._config = Config(self._config.data)
+
     @property
     def base_url(self) -> str:
         return self._base_url

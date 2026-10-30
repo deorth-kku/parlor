@@ -88,6 +88,22 @@ class ConfigManagerTests(unittest.TestCase):
                 asyncio.run(old_backend.aclose())
                 asyncio.run(old_tts.aclose())
 
+    def test_apply_keeps_previous_on_bad_numeric_value(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            # A non-numeric timeout makes backend construction fail; the
+            # previous clients must be kept and no exception may escape.
+            path = self._write_config(tmp, {"openai": {"timeout": "fast"}})
+            manager, old_backend, old_tts = self._make_manager(path)
+            try:
+                result = asyncio.run(manager.apply())
+                self.assertFalse(result.ok)
+                self.assertIn("keeping previous", result.message)
+                self.assertIs(manager.backend, old_backend)
+                self.assertIs(manager.tts, old_tts)
+            finally:
+                asyncio.run(old_backend.aclose())
+                asyncio.run(old_tts.aclose())
+
     def test_apply_keeps_previous_on_invalid_json(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "config.json"
@@ -117,6 +133,47 @@ class ConfigManagerTests(unittest.TestCase):
             finally:
                 asyncio.run(old_backend.aclose())
                 asyncio.run(old_tts.aclose())
+                if manager.backend is not None:
+                    asyncio.run(manager.backend.aclose())
+                if manager.tts is not None:
+                    asyncio.run(manager.tts.aclose())
+
+    def test_retired_tts_keeps_old_config_after_swap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            old_data = {
+                **OLD_OPENAI,
+                "tts": {
+                    "base_url": "http://old.example.test:9931",
+                    "voices": ["alice"],
+                    "languages": [{"code": "en", "label": "English"}],
+                },
+            }
+            new_data = {
+                **NEW_OPENAI,
+                "tts": {
+                    "base_url": "http://new.example.test:9931",
+                    "voices": ["bob"],
+                    "languages": [{"code": "ja", "label": "Japanese"}],
+                },
+            }
+            path = self._write_config(tmp, new_data)
+            # The old TTS shares one Config object, as it does with the
+            # server's module-level singleton.
+            shared = Config(old_data)
+            backend = make_backend(old_data)
+            tts = RemoteTTS(shared)
+            manager = ConfigManager(path, backend=backend, tts=tts)
+            try:
+                result = asyncio.run(manager.apply())
+                self.assertTrue(result.ok)
+                # Simulate the server replacing the singleton's data in place.
+                shared.replace(new_data)
+                # The retired client must still read its pre-reload config.
+                self.assertEqual([l["code"] for l in tts.languages()], ["en"])
+                self.assertEqual(tts.default_language, "en")
+            finally:
+                asyncio.run(backend.aclose())
+                asyncio.run(tts.aclose())
                 if manager.backend is not None:
                     asyncio.run(manager.backend.aclose())
                 if manager.tts is not None:

@@ -324,6 +324,14 @@ class OpenAICompatibleBackend:
             )
         )
 
+    @property
+    def base_url(self) -> str:
+        return self._config.base_url
+
+    @property
+    def model(self) -> str | None:
+        return self._config.model
+
     async def aclose(self) -> None:
         await self._client.aclose()
 

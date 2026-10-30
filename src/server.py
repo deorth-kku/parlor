@@ -37,7 +37,7 @@ backend: OpenAICompatibleBackend | None = None
 tts_remote: RemoteTTS | None = None
 manager: ConfigManager | None = None
 config_path = DEFAULT_CONFIG_PATH
-_reload_task: asyncio.Task | None = None
+_reload_task: asyncio.Task[None] | None = None
 
 
 def get_tts_defaults() -> dict[str, str]:
@@ -65,7 +65,7 @@ def resolve_tts_selection(msg: dict[str, object]) -> tuple[str, str]:
 async def load_models():
     global backend, tts_remote
     backend = OpenAICompatibleBackend.from_config(config)
-    print(f"OpenAI-compatible backend loaded: {backend._config.base_url} model={backend._config.model}")
+    print(f"OpenAI-compatible backend loaded: {backend.base_url} model={backend.model}")
     tts_remote = RemoteTTS(config)
     tts_remote.validate()
     print(f"Remote TTS loaded: {tts_remote.base_url}")
@@ -77,6 +77,10 @@ def on_sighup() -> None:
     """SIGHUP callback: hot-reload the config file (no restart needed)."""
     global _reload_task
     if manager is None:
+        return
+    if _reload_task is not None and not _reload_task.done():
+        # A reload is already in flight; the lock in ConfigManager would
+        # serialize them, but the in-flight one reads the same file state.
         return
     print("SIGHUP received: reloading config")
     _reload_task = asyncio.create_task(apply_reload())
@@ -97,8 +101,8 @@ async def apply_reload() -> None:
         if result.config is not None:
             config.replace(result.config.data)
         print(
-            f"Reloaded: backend={backend._config.base_url if backend else None} "
-            f"model={backend._config.model if backend else None} "
+            f"Reloaded: backend={backend.base_url if backend else None} "
+            f"model={backend.model if backend else None} "
             f"tts={tts_remote.base_url if tts_remote else None}"
         )
     else:

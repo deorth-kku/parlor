@@ -95,19 +95,28 @@ class ConfigManager:
             except (ValueError, OSError) as exc:
                 return ReloadResult(False, f"Failed to load config {self._path}: {exc}")
 
+            new_backend: OpenAICompatibleBackend | None = None
+            new_tts: RemoteTTS | None = None
             try:
                 new_backend = OpenAICompatibleBackend.from_config(new_config)
                 new_tts = RemoteTTS(new_config)
                 new_tts.validate()
             except Exception as exc:
-                # Fresh clients were never used; close them immediately.
-                await new_backend.aclose()
-                await new_tts.aclose()
+                # Close whatever was created; the previous clients keep running.
+                if new_backend is not None:
+                    await new_backend.aclose()
+                if new_tts is not None:
+                    await new_tts.aclose()
                 return ReloadResult(
                     False, f"Invalid config {self._path}, keeping previous: {exc}"
                 )
 
             old_backend, old_tts = self._backend, self._tts
+            # Freeze the old TTS's config so in-flight turns on the retired
+            # client don't mix new config values (languages, defaults) with
+            # old ones during the grace period.
+            if old_tts is not None:
+                old_tts.freeze_config()
             self._backend = new_backend
             self._tts = new_tts
             self._config = new_config
